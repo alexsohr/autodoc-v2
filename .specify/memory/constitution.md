@@ -1,11 +1,11 @@
 <!--
 Sync Impact Report
-- Version change: uninitialized → 1.0.0
-- Modified principles: (new) I. Code Quality and Readability; II. Testing Discipline and Standards; III. UX Consistency and Accessibility; IV. Performance and Reliability; V. Data Freshness and Provenance Integrity
-- Added sections: Non-Functional Requirements & Benchmarks; Development Workflow & Quality Gates; Governance
+- Version change: 1.0.0 → 1.1.0
+- Modified principles: none
+- Added sections: Technology Stack Requirements; Environment Configuration Standards
 - Removed sections: none
 - Templates requiring updates:
-  - .specify/templates/plan-template.md: ✅ updated (version reference set to 1.0.0)
+  - .specify/templates/plan-template.md: ✅ updated (version reference updated to 1.1.0)
   - .specify/templates/spec-template.md: ✅ aligned (no changes required)
   - .specify/templates/tasks-template.md: ✅ aligned (no changes required)
   - .specify/templates/commands/*: ⚠ not present in repository
@@ -118,6 +118,51 @@ developer confidence.
 - Data Retention: Conversation logs redacted of secrets by default; opt-in
   retention with explicit user consent.
 
+## Technology Stack Requirements
+
+The following technology stack is MANDATORY for all components:
+
+- **Backend Framework**: FastAPI MUST be used for all REST API endpoints and web
+  services. OpenAPI schema generation and automatic validation are required.
+- **AI/LLM Framework**: LangChain MUST be used for LLM integrations, prompt
+  management, and chain orchestration. LangGraph MUST be used for complex
+  multi-step AI workflows and agent-based processing.
+- **Data Validation**: Pydantic MUST be used for all data models, request/response
+  schemas, and configuration management. Type hints are mandatory.
+- **Async Processing**: All I/O operations MUST use Python's async/await patterns.
+  Blocking operations in async contexts are prohibited.
+
+Rationale: Standardized stack ensures consistency, leverages strong typing and
+validation, and provides robust AI/LLM integration capabilities.
+
+## Environment Configuration Standards
+
+Development and production environments MUST follow these configurations:
+
+### Development Environment
+- **Repository Storage**: Local filesystem MUST be used for cloning and storing
+  repositories. Path: `./data/repos/` with organization/project structure.
+- **Vector Database**: ChromaDB MUST be used for embeddings and semantic search.
+  Local persistent storage in `./data/chroma/` directory.
+- **Configuration**: Environment variables via `.env` file; sensitive values
+  MUST NOT be committed to version control.
+
+### Production Environment
+- **Repository Storage**: AWS S3 MUST be used for cloning and storing repositories.
+  Bucket structure: `{bucket}/repos/{org}/{project}/{branch}/`.
+- **Primary Database**: MongoDB MUST be used for all persistent data (metadata,
+  analysis results, user data). Connection pooling and replica sets required.
+- **Vector Database**: Production-grade ChromaDB deployment or equivalent vector
+  store with backup and recovery procedures.
+- **Configuration**: AWS Systems Manager Parameter Store or equivalent for
+  configuration management. Secrets rotation policies required.
+
+### Cross-Environment Requirements
+- **Migrations**: Database schema changes MUST be versioned and backward-compatible.
+- **Monitoring**: Both environments MUST have health checks, metrics collection,
+  and alerting configured.
+- **Backup**: Production data MUST be backed up daily with tested recovery procedures.
+
 ## Development Workflow & Quality Gates
 
 - Branches follow: `<ticket>-<short-description>`.
@@ -143,4 +188,4 @@ developer confidence.
   - Per-PR: Constitution Check in plans and CI gates MUST pass.
   - Quarterly: Audit selected features for adherence to principles and SLOs.
 
-**Version**: 1.0.0 | **Ratified**: TODO(RATIFICATION_DATE) | **Last Amended**: 2025-09-21
+**Version**: 1.1.0 | **Ratified**: TODO(RATIFICATION_DATE) | **Last Amended**: 2025-09-21

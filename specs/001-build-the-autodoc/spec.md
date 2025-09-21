@@ -67,19 +67,24 @@ When creating this spec from a user prompt:
 As a developer, I connect my repository to AutoDoc and trigger an analysis. AutoDoc clones the repo, performs deep code comprehension, and generates a clear, navigable wiki with structural documentation and visual diagrams. AutoDoc opens a pull request with the new/updated documentation. I can then ask conversational questions about the codebase (e.g., authentication flow, database logic) and receive accurate answers with source citations.
 
 ### Acceptance Scenarios
-1. **Given** a public GitHub repository URL, **When** I request analysis, **Then** AutoDoc clones the default branch, analyzes the code, and produces a documentation wiki with at least one structural overview page and a Mermaid diagram.
-2. **Given** a generated wiki, **When** AutoDoc completes analysis, **Then** a pull request is opened in the repository containing all new/updated documentation artifacts.
-3. **Given** the conversational interface, **When** I ask "Where is the database logic handled?", **Then** AutoDoc returns an answer that includes citations with file paths and commit SHAs and offers links to open those files in the repo.
-4. **Given** a repository update on the default branch, **When** AutoDoc's freshness window elapses, **Then** the wiki is updated and a follow-up PR is created if content changes are detected.
-5. **Given** a large monorepo, **When** analysis runs, **Then** the output remains responsive and structured (module-level pages and diagrams) and the chat answers still include correct citations.
+1. **Given** a public GitHub repository URL, **When** I request analysis, **Then** AutoDoc clones the default branch, analyzes the code, and produces a documentation wiki with at least one structural overview page and a Mermaid diagram within performance targets.
+2. **Given** a generated wiki, **When** AutoDoc completes analysis, **Then** a pull request is opened in the repository containing all new/updated documentation artifacts with proper provenance metadata.
+3. **Given** the conversational interface, **When** I ask "Where is the database logic handled?", **Then** AutoDoc returns a streaming answer within 1500ms that includes citations with file paths and commit SHAs and offers direct links to open those files in the repo.
+4. **Given** a repository update on the default branch, **When** changes are detected, **Then** the wiki is updated within 10 minutes and a follow-up PR is created if content changes are detected.
+5. **Given** a large monorepo, **When** analysis runs, **Then** the output remains responsive and structured (module-level pages and diagrams) with progress indicators, and chat answers include correct citations with sub-1500ms first token latency.
+6. **Given** a user with accessibility needs, **When** they navigate the interface using keyboard-only or screen reader, **Then** all functionality is accessible with proper ARIA labels and contrast ratios meeting WCAG 2.2 AA standards.
+7. **Given** multiple concurrent users analyzing different repositories, **When** the system is under load, **Then** performance targets are maintained and no private repository content is exposed to unauthorized users.
 
 ### Edge Cases
-- Very large repositories or monorepos with multiple packages.
-- Private repositories requiring permissions and minimal OAuth scopes.
+- Very large repositories or monorepos with multiple packages requiring performance optimization.
+- Private repositories requiring permissions and minimal OAuth scopes with proper security enforcement.
 - Binary-heavy or generated-code-dominant repositories with little source commentary.
-- Repositories with multiple primary languages and frameworks.
+- Repositories with multiple primary languages and frameworks requiring comprehensive analysis.
 - Repositories lacking a conventional entry point or with unconventional layouts.
-- Rate-limited provider APIs during cloning or PR creation.
+- Rate-limited provider APIs during cloning or PR creation requiring proper retry logic.
+- High-traffic scenarios with multiple concurrent analyses requiring performance maintenance.
+- Accessibility edge cases including screen readers, high-contrast modes, and keyboard-only navigation.
+- Network failures or partial outages requiring graceful degradation and clear error messaging.
 
 ## Requirements *(mandatory)*
 
@@ -103,6 +108,31 @@ As a developer, I connect my repository to AutoDoc and trigger an analysis. Auto
 - **FR-015**: The system MUST create pull requests targeting the default branch with standardized titles ("docs: Update AutoDoc analysis") and descriptions that include analysis summary, timestamp, and commit SHA of the analyzed branch.
 - **FR-016**: The system MUST generate diagrams without predefined limits on depth or size, dynamically adapting layout and grouping to maintain readability regardless of codebase complexity.
 - **FR-017**: The system MUST support unlimited chat conversations per repository with no artificial response length limits, and MUST store conversation history only for the current session without persistence across browser sessions or user accounts.
+
+### Performance Requirements
+- **PR-001**: The system MUST meet UI interaction targets of p50 ≤ 500ms and p95 ≤ 1500ms for all user actions.
+- **PR-002**: Chat responses MUST begin streaming within 1500ms at p95 latency.
+- **PR-003**: Repository analysis MUST complete within reasonable time bounds appropriate to repository size, with progress indicators for long-running operations.
+- **PR-004**: The system MUST handle repository updates and reflect changes within 10 minutes for 95% of default-branch updates, with a hard cap of 30 minutes.
+
+### Accessibility & UX Requirements
+- **UX-001**: The system MUST meet WCAG 2.2 AA accessibility standards.
+- **UX-002**: The system MUST support keyboard-first navigation and screen reader compatibility.
+- **UX-003**: The system MUST provide consistent theming (light/dark modes, high-contrast options).
+- **UX-004**: The system MUST include designed empty states, loading states, and error states for all user interactions.
+- **UX-005**: All content referencing code MUST include clear provenance (repository, file path, commit SHA) with direct links to source.
+
+### Security & Privacy Requirements
+- **SEC-001**: The system MUST enforce least-privilege access patterns for repository integrations.
+- **SEC-002**: The system MUST never expose private repository content to unauthorized users.
+- **SEC-003**: The system MUST keep authentication tokens out of logs and implement proper secrets management.
+- **SEC-004**: Conversation logs MUST be redacted of secrets by default, with explicit user consent required for any retention.
+
+### Environment & Deployment Requirements
+- **ENV-001**: The system MUST support both development and production deployment configurations with appropriate data storage and backup strategies.
+- **ENV-002**: The system MUST implement proper environment separation with different storage backends and security configurations for development vs production use.
+- **ENV-003**: The system MUST support scalable repository storage and retrieval appropriate to the deployment environment.
+- **ENV-004**: The system MUST implement proper database migration strategies and backup/recovery procedures for production deployments.
 
 ### Key Entities *(include if feature involves data)*
 - **Repository**: Source-of-truth project; attributes include provider, URL, default branch, access scope.
@@ -133,13 +163,13 @@ As a developer, I connect my repository to AutoDoc and trigger an analysis. Auto
 ## Execution Status
 *Updated by main() during processing*
 
-- [ ] User description parsed
-- [ ] Key concepts extracted
-- [ ] Ambiguities marked
-- [ ] User scenarios defined
-- [ ] Requirements generated
-- [ ] Entities identified
-- [ ] Review checklist passed
+- [x] User description parsed
+- [x] Key concepts extracted
+- [x] Ambiguities resolved and requirements clarified
+- [x] User scenarios defined with constitution compliance
+- [x] Requirements generated (functional, performance, UX, security, environment)
+- [x] Entities identified
+- [x] Review checklist passed
 
 ---
 
