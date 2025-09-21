@@ -66,10 +66,13 @@ specs/[###-feature]/
 ```
 # Option 1: Single project (DEFAULT)
 src/
+├── agents/
 ├── models/
+├── prompts/
 ├── services/
-├── cli/
-└── lib/
+├── api/
+└── utils/
+
 
 tests/
 ├── contract/
@@ -79,8 +82,11 @@ tests/
 # Option 2: Web application (when "frontend" + "backend" detected)
 backend/
 ├── src/
+│   ├── agents/
 │   ├── models/
+│   ├── prompts/
 │   ├── services/
+│   ├── utils/
 │   └── api/
 └── tests/
 
