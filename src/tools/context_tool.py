@@ -208,8 +208,9 @@ class ContextTool(BaseTool):
         language_filter: Optional[str],
         k: int,
     ) -> List[Dict[str, Any]]:
-        """Perform text-based search"""
+        """Perform text-based search with proper textScore ranking"""
         mongodb = await get_mongodb_adapter()
+        collection = mongodb.get_collection("code_documents")
 
         # Build text search query
         search_query = {"$text": {"$search": query}}
@@ -219,27 +220,34 @@ class ContextTool(BaseTool):
         if language_filter:
             search_query["language"] = language_filter
 
-        # Execute search
-        documents = await mongodb.find_documents(
-            "code_documents",
-            search_query,
-            limit=k,
-            sort_field="score",
-            sort_direction=1,  # Text score descending
+        # Execute search with textScore projection and sorting
+        cursor = (
+            collection.find(search_query, {"score": {"$meta": "textScore"}})
+            .sort([("score", {"$meta": "textScore"})])
+            .limit(k)
         )
 
         # Convert to expected format
         results = []
-        for doc in documents:
+        async for doc in cursor:
             from uuid import UUID
 
+            # Convert repository_id back to UUID
             doc["repository_id"] = UUID(doc["repository_id"])
+            
+            # Remove embedding field if present (not needed for results)
+            doc.pop("embedding", None)
+            
+            # Extract the text score
+            text_score = doc.get("score", 0.0)
+            
+            # Create CodeDocument instance
             code_doc = CodeDocument(**doc)
 
             results.append(
                 {
                     "document": code_doc,
-                    "score": doc.get("score", 0.5),  # Default text search score
+                    "score": text_score,
                     "source": "text",
                 }
             )
