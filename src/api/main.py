@@ -79,8 +79,8 @@ generates comprehensive documentation, and provides intelligent chat-based queri
 
 ### Getting Started
 
-1. Register a repository using the `/api/v1/repositories` endpoint
-2. Wait for analysis to complete (check status with `/api/v1/repositories/{id}/status`)
+1. Register a repository using the `/api/v2/repositories` endpoint
+2. Wait for analysis to complete (check status with `/api/v2/repositories/{id}/status`)
 3. Generate wiki documentation or start chatting about your code
         """,
         version="2.0.0",
