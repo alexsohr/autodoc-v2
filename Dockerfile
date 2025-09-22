@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements.txt pyproject.toml setup.py ./
+COPY pyproject.toml ./
 
 # Install Python dependencies
 RUN pip install --upgrade pip setuptools wheel && \
