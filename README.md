@@ -444,20 +444,6 @@ graph TB
     
     Storage --> S3
     Storage --> MongoDB
-    
-    classDef apiLayer fill:#e1f5fe
-    classDef serviceLayer fill:#f3e5f5
-    classDef agentLayer fill:#e8f5e8
-    classDef toolLayer fill:#fff3e0
-    classDef dataLayer fill:#fce4ec
-    classDef externalLayer fill:#f1f8e9
-    
-    class FastAPI,Routes,Middleware apiLayer
-    class AuthSvc,RepoSvc,DocSvc,WikiSvc,ChatSvc serviceLayer
-    class DocAgent,WikiAgent,Orchestrator agentLayer
-    class RepoTool,EmbedTool,ContextTool,LLMTool toolLayer
-    class Models,MongoDB,Storage dataLayer
-    class GitHub,OpenAI,Gemini,Ollama,S3 externalLayer
 ```
 
 ## 🏷️ Tech Stack
