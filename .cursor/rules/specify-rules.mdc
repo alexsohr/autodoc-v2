@@ -13,7 +13,7 @@ tests/
 
 ## Commands
 cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLOGIES] pytest [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLOGIES] ruff check .
-use .env for python environment.
+activate venv for python environment before running any python command.
 
 ## Code Style
 Python 3.12+ (async/await required for I/O operations): Follow standard conventions

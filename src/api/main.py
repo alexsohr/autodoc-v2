@@ -5,16 +5,26 @@ import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, status
+from fastapi import FastAPI, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 import uvicorn
 
 # Add src to Python path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.api.routes import health
+from src.api.routes import repositories, wiki, chat, webhooks
+from src.api.middleware.logging import request_logging_middleware
+from src.api.middleware.error_handler import (
+    error_handling_middleware,
+    http_exception_handler,
+    validation_exception_handler,
+    general_exception_handler
+)
 from src.utils.database import init_database, close_database
+from src.utils.config_loader import get_settings
 
 
 @asynccontextmanager
@@ -48,6 +58,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 def create_app() -> FastAPI:
     """Create and configure FastAPI application"""
     
+    settings = get_settings()
+    
     app = FastAPI(
         title="AutoDoc v2",
         description="Intelligent Automated Documentation Partner",
@@ -58,17 +70,35 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
     
+    # Add custom middleware
+    app.middleware("http")(request_logging_middleware)
+    app.middleware("http")(error_handling_middleware)
+    
+    # Add exception handlers
+    app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(Exception, general_exception_handler)
+    
     # CORS middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","),
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     
-    # Include routers
+    # Include routers with API prefix
+    api_prefix = settings.api_prefix
+    
+    # Health checks (no prefix)
     app.include_router(health.router)
+    
+    # API routes with prefix
+    app.include_router(repositories.router, prefix=api_prefix)
+    app.include_router(wiki.router, prefix=api_prefix)
+    app.include_router(chat.router, prefix=api_prefix)
+    app.include_router(webhooks.router)  # Webhooks don't use API prefix
     
     # Root endpoint
     @app.get("/", status_code=status.HTTP_200_OK)

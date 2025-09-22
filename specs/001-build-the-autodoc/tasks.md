@@ -99,21 +99,21 @@
 - [x] T037 Chat service (sessions, Q&A) in src/services/chat_service.py
 
 ## Phase 3.4: API Implementation
-- [ ] T038 FastAPI main application in src/api/main.py
-- [ ] T039 Repository API routes in src/api/routes/repositories.py
-- [ ] T040 Documentation/wiki API routes in src/api/routes/wiki.py
-- [ ] T041 Chat API routes in src/api/routes/chat.py
-- [ ] T042 Webhook API routes in src/api/routes/webhooks.py
-- [ ] T043 [P] Authentication middleware in src/api/middleware/auth.py
-- [ ] T044 [P] Request logging middleware in src/api/middleware/logging.py
-- [ ] T045 [P] Error handling middleware in src/api/middleware/error_handler.py
+- [x] T038 FastAPI main application in src/api/main.py
+- [x] T039 Repository API routes in src/api/routes/repositories.py
+- [x] T040 Documentation/wiki API routes in src/api/routes/wiki.py
+- [x] T041 Chat API routes in src/api/routes/chat.py
+- [x] T042 Webhook API routes in src/api/routes/webhooks.py
+- [x] T043 [P] Authentication middleware in src/api/middleware/auth.py
+- [x] T044 [P] Request logging middleware in src/api/middleware/logging.py
+- [x] T045 [P] Error handling middleware in src/api/middleware/error_handler.py
 
 ## Phase 3.5: Integration & Configuration
-- [ ] T046 MongoDB connection and initialization in src/utils/database.py
-- [ ] T047 Configuration loader (env-specific) in src/utils/config_loader.py
-- [ ] T048 Webhook signature validation in src/utils/webhook_validator.py
-- [ ] T049 Retry logic with backoff in src/utils/retry_utils.py
-- [ ] T050 Structured logging configuration in src/utils/logging_config.py
+- [x] T046 MongoDB connection and initialization in src/utils/database.py
+- [x] T047 Configuration loader (env-specific) in src/utils/config_loader.py
+- [x] T048 Webhook signature validation in src/utils/webhook_validator.py
+- [x] T049 Retry logic with backoff in src/utils/retry_utils.py using `tenacity` library
+- [x] T050 Structured logging configuration in src/utils/logging_config.py
 
 ## Phase 3.6: Polish & Validation
 - [ ] T051 [P] Unit tests for models in tests/unit/test_models.py
