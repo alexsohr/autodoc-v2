@@ -19,12 +19,98 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
-@router.post("/github")
+@router.post(
+    "/github",
+    summary="GitHub webhook endpoint",
+    description="Receive webhook events from GitHub to trigger automatic documentation updates when repository changes occur.",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "push_event": {
+                            "summary": "Push Event",
+                            "description": "GitHub push event webhook payload",
+                            "value": {
+                                "ref": "refs/heads/main",
+                                "repository": {
+                                    "id": 123456789,
+                                    "full_name": "myorg/myrepo",
+                                    "html_url": "https://github.com/myorg/myrepo",
+                                    "clone_url": "https://github.com/myorg/myrepo.git",
+                                    "default_branch": "main"
+                                },
+                                "commits": [
+                                    {
+                                        "id": "abc123def456789012345678901234567890abcd",
+                                        "message": "Update README.md",
+                                        "author": {
+                                            "name": "John Doe",
+                                            "email": "john@example.com"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "pull_request_event": {
+                            "summary": "Pull Request Event",
+                            "description": "GitHub pull request webhook payload",
+                            "value": {
+                                "action": "opened",
+                                "pull_request": {
+                                    "id": 123456,
+                                    "number": 42,
+                                    "title": "Add new feature",
+                                    "state": "open"
+                                },
+                                "repository": {
+                                    "full_name": "myorg/myrepo",
+                                    "html_url": "https://github.com/myorg/myrepo"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "200": {
+                "description": "Webhook processed successfully",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "processed": {
+                                "summary": "Event Processed",
+                                "value": {
+                                    "status": "processed",
+                                    "message": "Repository analysis triggered",
+                                    "repository_id": "550e8400-e29b-41d4-a716-446655440000",
+                                    "event_type": "push",
+                                    "processing_time": 0.5
+                                }
+                            },
+                            "ignored": {
+                                "summary": "Event Ignored",
+                                "value": {
+                                    "status": "ignored",
+                                    "message": "Event type not subscribed",
+                                    "repository_id": "550e8400-e29b-41d4-a716-446655440000",
+                                    "event_type": "issues",
+                                    "processing_time": 0.1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def github_webhook(
     request: Request,
-    x_github_event: str = Header(..., alias="X-GitHub-Event"),
-    x_hub_signature_256: str = Header(..., alias="X-Hub-Signature-256"),
-    x_github_delivery: str = Header(..., alias="X-GitHub-Delivery"),
+    x_github_event: str = Header(..., alias="X-GitHub-Event", description="GitHub event type (e.g., push, pull_request)"),
+    x_hub_signature_256: str = Header(..., alias="X-Hub-Signature-256", description="GitHub webhook signature for validation"),
+    x_github_delivery: str = Header(..., alias="X-GitHub-Delivery", description="Unique delivery ID for this webhook"),
 ):
     """GitHub webhook endpoint"""
     try:

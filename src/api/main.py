@@ -9,6 +9,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
 # Add src to Python path for imports
@@ -59,14 +60,81 @@ def create_app() -> FastAPI:
 
     settings = get_settings()
 
+    # Enhanced OpenAPI metadata
     app = FastAPI(
         title="AutoDoc v2",
-        description="Intelligent Automated Documentation Partner",
+        description="""
+## Intelligent Automated Documentation Partner
+
+AutoDoc v2 is an AI-powered documentation system that automatically analyzes repositories, 
+generates comprehensive documentation, and provides intelligent chat-based queries about your codebase.
+
+### Features
+
+* **Repository Analysis**: Automatically analyze code repositories and extract documentation
+* **Wiki Generation**: Generate comprehensive wiki documentation from your codebase
+* **Intelligent Chat**: Ask questions about your code and get AI-powered answers
+* **Webhook Integration**: Real-time updates when your repository changes
+* **Multi-provider Support**: Works with GitHub, GitLab, and other Git providers
+
+### Getting Started
+
+1. Register a repository using the `/api/v1/repositories` endpoint
+2. Wait for analysis to complete (check status with `/api/v1/repositories/{id}/status`)
+3. Generate wiki documentation or start chatting about your code
+        """,
         version="2.0.0",
+        contact={
+            "name": "AutoDoc Team",
+            "email": "support@autodoc.dev",
+            "url": "https://autodoc.dev",
+        },
+        license_info={
+            "name": "MIT License",
+            "url": "https://opensource.org/licenses/MIT",
+        },
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         lifespan=lifespan,
+        # Enhanced Swagger UI configuration
+        swagger_ui_parameters={
+            "deepLinking": True,
+            "displayRequestDuration": True,
+            "docExpansion": "list",
+            "operationsSorter": "method",
+            "filter": True,
+            "showExtensions": True,
+            "showCommonExtensions": True,
+            "tryItOutEnabled": True,
+            "persistAuthorization": True,
+            "displayOperationId": False,
+            "defaultModelsExpandDepth": 2,
+            "defaultModelExpandDepth": 2,
+            "syntaxHighlight.theme": "nord",
+        },
+        openapi_tags=[
+            {
+                "name": "health",
+                "description": "Health check and system status endpoints for monitoring service availability.",
+            },
+            {
+                "name": "repositories",
+                "description": "Repository management endpoints for registering, analyzing, and configuring code repositories.",
+            },
+            {
+                "name": "chat",
+                "description": "Interactive chat endpoints for asking questions about repository codebases using AI.",
+            },
+            {
+                "name": "wiki",
+                "description": "Documentation generation endpoints for creating and managing wiki-style documentation.",
+            },
+            {
+                "name": "webhooks",
+                "description": "Webhook endpoints for receiving real-time updates from Git providers.",
+            },
+        ],
     )
 
     # Add custom middleware
@@ -113,8 +181,75 @@ def create_app() -> FastAPI:
     return app
 
 
+def custom_openapi():
+    """Generate custom OpenAPI schema with security schemes"""
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        contact=app.contact,
+        license_info=app.license_info,
+        openapi_version="3.1.0",
+    )
+    
+    # Add security schemes
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "JWT Bearer token authentication. Obtain token via login endpoint."
+        },
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "API key authentication for service-to-service communication."
+        }
+    }
+    
+    # Add global security requirement (can be overridden per endpoint)
+    openapi_schema["security"] = [
+        {"BearerAuth": []},
+        {"ApiKeyAuth": []}
+    ]
+    
+    # Add servers information
+    openapi_schema["servers"] = [
+        {
+            "url": "/",
+            "description": "Current server"
+        },
+        {
+            "url": "http://localhost:8000",
+            "description": "Local development server"
+        },
+        {
+            "url": "https://api.autodoc.dev",
+            "description": "Production server"
+        }
+    ]
+    
+    # Add additional metadata
+    openapi_schema["info"]["termsOfService"] = "https://autodoc.dev/terms"
+    openapi_schema["info"]["x-logo"] = {
+        "url": "https://autodoc.dev/logo.png",
+        "altText": "AutoDoc v2 Logo"
+    }
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
 # Create app instance
 app = create_app()
+
+# Set custom OpenAPI schema
+app.openapi = custom_openapi
 
 
 def main():
