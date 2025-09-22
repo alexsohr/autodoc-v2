@@ -116,16 +116,16 @@
 - [x] T050 Structured logging configuration in src/utils/logging_config.py
 
 ## Phase 3.6: Polish & Validation
-- [ ] T051 [P] Unit tests for models in tests/unit/test_models.py
-- [ ] T052 [P] Unit tests for services in tests/unit/test_services.py
-- [ ] T053 [P] Unit tests for tools in tests/unit/test_tools.py
-- [ ] T054 [P] Performance tests (API latency) in tests/performance/test_api_performance.py
-- [ ] T055 [P] Performance tests (chat streaming) in tests/performance/test_chat_performance.py
-- [ ] T056 [P] Load tests for webhook processing in tests/performance/test_webhook_load.py
-- [ ] T057 [P] Security tests (webhook signatures) in tests/security/test_webhook_security.py
-- [ ] T058 [P] Update API documentation in docs/api.md
-- [ ] T059 Remove code duplication and optimize imports
-- [ ] T060 Run quickstart validation scenarios
+- [x] T051 [P] Unit tests for models in tests/unit/test_models.py
+- [x] T052 [P] Unit tests for services in tests/unit/test_services.py
+- [x] T053 [P] Unit tests for tools in tests/unit/test_tools.py
+- [x] T054 [P] Performance tests (API latency) in tests/performance/test_api_performance.py
+- [x] T055 [P] Performance tests (chat streaming) in tests/performance/test_chat_performance.py
+- [x] T056 [P] Load tests for webhook processing in tests/performance/test_webhook_load.py
+- [x] T057 [P] Security tests (webhook signatures) in tests/security/test_webhook_security.py
+- [x] T058 [P] Update API documentation in docs/api.md
+- [x] T059 Remove code duplication and optimize imports
+- [x] T060 Run quickstart validation scenarios
 
 ## Dependencies
 - Setup (T001-T006) before all other tasks

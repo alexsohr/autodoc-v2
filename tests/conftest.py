@@ -2,17 +2,20 @@
 
 import asyncio
 import os
-import pytest
-from typing import AsyncGenerator, Generator
-from httpx import AsyncClient
-from fastapi.testclient import TestClient
 
 # Add src to path for testing
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from typing import AsyncGenerator, Generator
+
+import pytest
+from fastapi.testclient import TestClient
+from httpx import AsyncClient
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from unittest.mock import patch
 
 from src.api.main import create_app
-from unittest.mock import patch
 
 
 @pytest.fixture(scope="session")
@@ -27,8 +30,10 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 def test_app():
     """Create a test FastAPI application"""
     # Mock database operations for testing
-    with patch('src.utils.database.init_database'), \
-         patch('src.utils.database.close_database'):
+    with (
+        patch("src.utils.database.init_database"),
+        patch("src.utils.database.close_database"),
+    ):
         app = create_app()
         return app
 
@@ -43,7 +48,9 @@ def client(test_app) -> Generator[TestClient, None, None]:
 @pytest.fixture
 async def async_client(test_app) -> AsyncGenerator[AsyncClient, None]:
     """Create an async test client for the FastAPI application"""
-    async with AsyncClient(app=test_app, base_url="http://testserver") as async_test_client:
+    async with AsyncClient(
+        app=test_app, base_url="http://testserver"
+    ) as async_test_client:
         yield async_test_client
 
 
@@ -62,10 +69,10 @@ def mock_env_vars(monkeypatch):
         "OPENAI_API_KEY": "test-openai-key",
         "OPENAI_MODEL": "gpt-3.5-turbo",
     }
-    
+
     for key, value in env_vars.items():
         monkeypatch.setenv(key, value)
-    
+
     return env_vars
 
 
@@ -75,7 +82,7 @@ def sample_repository_data():
     return {
         "url": "https://github.com/test-org/test-repo",
         "provider": "github",
-        "branch": "main"
+        "branch": "main",
     }
 
 
@@ -94,7 +101,7 @@ def sample_wiki_data():
                 "importance": "high",
                 "file_paths": ["README.md", "docs/overview.md"],
                 "related_pages": ["getting-started"],
-                "content": "# Overview\n\nThis is a test repository..."
+                "content": "# Overview\n\nThis is a test repository...",
             }
         ],
         "sections": [
@@ -102,10 +109,10 @@ def sample_wiki_data():
                 "id": "getting-started",
                 "title": "Getting Started",
                 "pages": ["overview"],
-                "subsections": []
+                "subsections": [],
             }
         ],
-        "root_sections": ["getting-started"]
+        "root_sections": ["getting-started"],
     }
 
 
@@ -114,5 +121,5 @@ def sample_chat_data():
     """Sample chat data for testing"""
     return {
         "question": "How does authentication work in this codebase?",
-        "context_hint": "authentication, login, security"
+        "context_hint": "authentication, login, security",
     }
