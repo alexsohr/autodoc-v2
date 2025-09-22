@@ -178,78 +178,78 @@ generates comprehensive documentation, and provides intelligent chat-based queri
             "health": "/health",
         }
 
-    return app
-
-
-def custom_openapi():
-    """Generate custom OpenAPI schema with security schemes"""
-    if app.openapi_schema:
+    # Define custom OpenAPI function as closure
+    def custom_openapi():
+        """Generate custom OpenAPI schema with security schemes"""
+        if app.openapi_schema:
+            return app.openapi_schema
+        
+        openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+            contact=app.contact,
+            license_info=app.license_info,
+            openapi_version="3.1.0",
+        )
+        
+        # Add security schemes
+        openapi_schema["components"]["securitySchemes"] = {
+            "BearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "JWT Bearer token authentication. Obtain token via login endpoint."
+            },
+            "ApiKeyAuth": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-API-Key",
+                "description": "API key authentication for service-to-service communication."
+            }
+        }
+        
+        # Add global security requirement (can be overridden per endpoint)
+        openapi_schema["security"] = [
+            {"BearerAuth": []},
+            {"ApiKeyAuth": []}
+        ]
+        
+        # Add servers information
+        openapi_schema["servers"] = [
+            {
+                "url": "/",
+                "description": "Current server"
+            },
+            {
+                "url": "http://localhost:8000",
+                "description": "Local development server"
+            },
+            {
+                "url": "https://api.autodoc.dev",
+                "description": "Production server"
+            }
+        ]
+        
+        # Add additional metadata
+        openapi_schema["info"]["termsOfService"] = "https://autodoc.dev/terms"
+        openapi_schema["info"]["x-logo"] = {
+            "url": "https://autodoc.dev/logo.png",
+            "altText": "AutoDoc v2 Logo"
+        }
+        
+        app.openapi_schema = openapi_schema
         return app.openapi_schema
-    
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        routes=app.routes,
-        contact=app.contact,
-        license_info=app.license_info,
-        openapi_version="3.1.0",
-    )
-    
-    # Add security schemes
-    openapi_schema["components"]["securitySchemes"] = {
-        "BearerAuth": {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "JWT",
-            "description": "JWT Bearer token authentication. Obtain token via login endpoint."
-        },
-        "ApiKeyAuth": {
-            "type": "apiKey",
-            "in": "header",
-            "name": "X-API-Key",
-            "description": "API key authentication for service-to-service communication."
-        }
-    }
-    
-    # Add global security requirement (can be overridden per endpoint)
-    openapi_schema["security"] = [
-        {"BearerAuth": []},
-        {"ApiKeyAuth": []}
-    ]
-    
-    # Add servers information
-    openapi_schema["servers"] = [
-        {
-            "url": "/",
-            "description": "Current server"
-        },
-        {
-            "url": "http://localhost:8000",
-            "description": "Local development server"
-        },
-        {
-            "url": "https://api.autodoc.dev",
-            "description": "Production server"
-        }
-    ]
-    
-    # Add additional metadata
-    openapi_schema["info"]["termsOfService"] = "https://autodoc.dev/terms"
-    openapi_schema["info"]["x-logo"] = {
-        "url": "https://autodoc.dev/logo.png",
-        "altText": "AutoDoc v2 Logo"
-    }
-    
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
+
+    # Set custom OpenAPI schema
+    app.openapi = custom_openapi
+
+    return app
 
 
 # Create app instance
 app = create_app()
-
-# Set custom OpenAPI schema
-app.openapi = custom_openapi
 
 
 def main():
