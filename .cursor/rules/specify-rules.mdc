@@ -1,0 +1,25 @@
+# autodoc-v2 Development Guidelines
+
+Auto-generated from all feature plans. Last updated: 2025-09-21
+
+## Active Technologies
+- Python 3.12+ (async/await required for I/O operations) + FastAPI, LangGraph, LangChain, Pydantic, ChromaDB, boto3, pymongo (001-build-the-autodoc)
+
+## Project Structure
+```
+src/
+tests/
+```
+
+## Commands
+cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLOGIES] pytest [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLOGIES] ruff check .
+activate venv for python environment before running any python command.
+
+## Code Style
+Python 3.12+ (async/await required for I/O operations): Follow standard conventions
+
+## Recent Changes
+- 001-build-the-autodoc: Added Python 3.12+ (async/await required for I/O operations) + FastAPI, LangGraph, LangChain, Pydantic, ChromaDB, boto3, pymongo
+
+<!-- MANUAL ADDITIONS START -->
+<!-- MANUAL ADDITIONS END -->

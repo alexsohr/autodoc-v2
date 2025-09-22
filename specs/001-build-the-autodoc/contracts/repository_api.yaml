@@ -1,0 +1,535 @@
+openapi: 3.0.3
+info:
+  title: AutoDoc Repository API
+  description: Repository management and analysis endpoints
+  version: 2.0.0
+
+paths:
+  /repositories:
+    post:
+      summary: Register and analyze a repository
+      description: Registers a new repository for analysis and triggers the analysis workflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepositoryRequest'
+      responses:
+        '201':
+          description: Repository registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repository'
+        '400':
+          description: Invalid repository URL or parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Repository already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      summary: List repositories
+      description: Retrieve a list of registered repositories with pagination
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed]
+      responses:
+        '200':
+          description: List of repositories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryList'
+
+  /repositories/{repository_id}:
+    get:
+      summary: Get repository details
+      description: Retrieve detailed information about a specific repository
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Repository details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repository'
+        '404':
+          description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: Remove repository
+      description: Remove a repository and all associated analysis data
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Repository removed successfully
+        '404':
+          description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repository_id}/analyze:
+    post:
+      summary: Trigger repository analysis
+      description: Manually trigger analysis for a repository
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalysisRequest'
+      responses:
+        '202':
+          description: Analysis started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisStatus'
+        '404':
+          description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Analysis already in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repository_id}/status:
+    get:
+      summary: Get analysis status
+      description: Retrieve the current analysis status for a repository
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Analysis status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisStatus'
+        '404':
+          description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repository_id}/webhook:
+    put:
+      summary: Configure repository webhook settings
+      description: Update webhook configuration for a repository
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookConfig'
+      responses:
+        '200':
+          description: Webhook configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfigResponse'
+        '404':
+          description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      summary: Get repository webhook configuration
+      description: Retrieve current webhook settings and setup instructions
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Webhook configuration and setup instructions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfigResponse'
+        '404':
+          description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/github:
+    post:
+      summary: GitHub webhook endpoint
+      description: Receive GitHub webhook events for all repositories
+      parameters:
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema:
+            type: string
+          description: GitHub event type
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          schema:
+            type: string
+          description: GitHub webhook signature
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          schema:
+            type: string
+          description: GitHub delivery ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: GitHub webhook payload
+      responses:
+        '200':
+          description: Webhook processed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+        '400':
+          description: Invalid webhook payload or signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Repository not found in AutoDoc system
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/bitbucket:
+    post:
+      summary: Bitbucket webhook endpoint
+      description: Receive Bitbucket webhook events for all repositories
+      parameters:
+        - name: X-Event-Key
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Bitbucket event type
+        - name: X-Hook-UUID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Bitbucket hook UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Bitbucket webhook payload
+      responses:
+        '200':
+          description: Webhook processed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+        '400':
+          description: Invalid webhook payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Repository not found in AutoDoc system
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    RepositoryRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri
+          example: "https://github.com/owner/repo"
+        branch:
+          type: string
+          description: Target branch (defaults to repository default)
+          example: "main"
+        provider:
+          type: string
+          enum: [github, bitbucket, gitlab]
+          description: Repository provider (auto-detected if not specified)
+
+    Repository:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [github, bitbucket, gitlab]
+        url:
+          type: string
+          format: uri
+        org:
+          type: string
+        name:
+          type: string
+        default_branch:
+          type: string
+        access_scope:
+          type: string
+          enum: [public, private]
+        last_analyzed:
+          type: string
+          format: date-time
+          nullable: true
+        analysis_status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        commit_sha:
+          type: string
+          nullable: true
+        webhook_configured:
+          type: boolean
+          default: false
+          description: Whether webhook is configured for this repository
+        webhook_secret:
+          type: string
+          nullable: true
+          description: Secret for validating webhook signatures
+        subscribed_events:
+          type: array
+          items:
+            type: string
+          default: []
+          description: List of events that trigger documentation updates
+        last_webhook_event:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of last received webhook event
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RepositoryList:
+      type: object
+      properties:
+        repositories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Repository'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    AnalysisRequest:
+      type: object
+      properties:
+        branch:
+          type: string
+          description: Specific branch to analyze
+        force:
+          type: boolean
+          default: false
+          description: Force re-analysis even if up to date
+
+    AnalysisStatus:
+      type: object
+      properties:
+        repository_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Analysis progress percentage
+        current_step:
+          type: string
+          description: Current analysis step
+        estimated_completion:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+
+    WebhookConfig:
+      type: object
+      properties:
+        webhook_secret:
+          type: string
+          description: Secret for validating webhook signatures
+        subscribed_events:
+          type: array
+          items:
+            type: string
+          description: List of events that trigger documentation updates
+          example: ["push", "pull_request", "merge"]
+
+    WebhookConfigResponse:
+      type: object
+      properties:
+        webhook_configured:
+          type: boolean
+        webhook_secret:
+          type: string
+          nullable: true
+        subscribed_events:
+          type: array
+          items:
+            type: string
+        setup_instructions:
+          type: object
+          properties:
+            github:
+              type: object
+              properties:
+                webhook_url:
+                  type: string
+                  example: "https://your-autodoc-instance.com/webhooks/github"
+                content_type:
+                  type: string
+                  example: "application/json"
+                events:
+                  type: array
+                  items:
+                    type: string
+                  example: ["push", "pull_request"]
+                instructions:
+                  type: string
+                  example: "Go to Settings > Webhooks > Add webhook in your GitHub repository"
+            bitbucket:
+              type: object
+              properties:
+                webhook_url:
+                  type: string
+                  example: "https://your-autodoc-instance.com/webhooks/bitbucket"
+                events:
+                  type: array
+                  items:
+                    type: string
+                  example: ["repo:push", "pullrequest:fulfilled"]
+                instructions:
+                  type: string
+                  example: "Go to Settings > Webhooks > Add webhook in your Bitbucket repository"
+
+    WebhookResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [processed, ignored, error]
+        message:
+          type: string
+        repository_id:
+          type: string
+          format: uuid
+          nullable: true
+        event_type:
+          type: string
+        processing_time:
+          type: number
+          description: Processing time in seconds
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
