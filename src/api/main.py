@@ -189,12 +189,16 @@ generates comprehensive documentation, and provides intelligent chat-based queri
             version=app.version,
             description=app.description,
             routes=app.routes,
+            tags=app.openapi_tags,
             contact=app.contact,
             license_info=app.license_info,
             openapi_version="3.1.0",
         )
         
-        # Add security schemes
+        # Add security schemes (ensure components section exists)
+        if "components" not in openapi_schema:
+            openapi_schema["components"] = {}
+        
         openapi_schema["components"]["securitySchemes"] = {
             "BearerAuth": {
                 "type": "http",
