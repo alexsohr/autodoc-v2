@@ -18,6 +18,7 @@ AutoDoc v2 is an intelligent documentation generation system that automatically 
 - **🏗️ Modern Architecture**: FastAPI + LangGraph + MongoDB with vector search
 - **🔒 Enterprise Security**: JWT authentication, webhook signature validation, injection prevention
 - **📊 Performance Optimized**: P50 ≤ 500ms API responses, streaming chat with ≤ 1500ms first token
+- **📚 Interactive API Documentation**: Comprehensive Swagger UI with examples and real-time testing
 - **🧪 Test-Driven Development**: 100% TDD implementation with comprehensive test coverage
 - **🔄 Multi-LLM Support**: OpenAI GPT, Google Gemini, Ollama local models
 - **📦 Flexible Storage**: Local filesystem, AWS S3, MongoDB with vector capabilities
@@ -64,9 +65,10 @@ python -m src.api.main
 ```
 
 6. **Access the API:**
-- **API Documentation**: http://localhost:8000/docs
+- **Interactive API Documentation (Swagger UI)**: http://localhost:8000/docs
+- **Alternative API Documentation (ReDoc)**: http://localhost:8000/redoc
 - **Health Check**: http://localhost:8000/health
-- **OpenAPI Spec**: http://localhost:8000/openapi.json
+- **OpenAPI Specification**: http://localhost:8000/openapi.json
 
 ## 🔧 Configuration
 
@@ -160,6 +162,88 @@ curl -X POST http://localhost:8000/api/v2/repositories/$REPO_ID/chat/sessions/$S
     "context_hint": "authentication, security, login"
   }'
 ```
+
+## 📚 API Documentation
+
+AutoDoc v2 provides comprehensive, interactive API documentation powered by **Swagger UI** and **ReDoc**.
+
+### 🎯 Interactive Documentation Features
+
+- **🔍 Swagger UI**: Full interactive API explorer at `/docs`
+  - Try out API endpoints directly in your browser
+  - Comprehensive request/response examples
+  - Built-in authentication support
+  - Real-time API testing with custom parameters
+
+- **📖 ReDoc**: Clean, professional documentation at `/redoc`
+  - Three-panel layout for easy navigation
+  - Detailed schema documentation
+  - Code samples in multiple formats
+  - Responsive design for mobile and desktop
+
+### 🚀 Key Documentation Features
+
+#### **Rich Examples & Use Cases**
+Every endpoint includes multiple real-world examples:
+
+- **Repository Management**
+  - GitHub public/private repository registration
+  - GitLab and Bitbucket integration examples
+  - Analysis triggering with different options
+  - Webhook configuration scenarios
+
+- **Conversational AI**
+  - Architecture questions ("How does authentication work?")
+  - Function-specific queries ("What does create_user do?")
+  - Debugging help ("How are errors handled?")
+  - Best practices questions ("What testing patterns are used?")
+
+- **Webhook Integration**
+  - GitHub push event payloads
+  - Pull request webhook examples
+  - Bitbucket event handling
+  - Response format examples
+
+#### **Authentication Documentation**
+- **JWT Bearer Token**: Primary authentication method
+- **API Key Authentication**: Service-to-service communication
+- **Interactive Auth Testing**: Test authenticated endpoints directly in Swagger UI
+
+#### **Enhanced Developer Experience**
+- **Detailed Descriptions**: Every endpoint has comprehensive descriptions
+- **Parameter Documentation**: Clear explanations of all query parameters and request bodies
+- **Response Examples**: Multiple response scenarios (success, error, edge cases)
+- **Schema Validation**: Real-time request validation with helpful error messages
+
+### 🛠️ Accessing the Documentation
+
+```bash
+# Start the server
+python -m src.api.main
+
+# Access documentation
+open http://localhost:8000/docs      # Swagger UI (interactive)
+open http://localhost:8000/redoc     # ReDoc (clean reading)
+open http://localhost:8000/openapi.json  # Raw OpenAPI specification
+```
+
+### 📋 API Endpoints Overview
+
+| Category | Endpoints | Description |
+|----------|-----------|-------------|
+| **Health** | `/health/*` | System health and readiness checks |
+| **Repositories** | `/api/v2/repositories/*` | Repository management and analysis |
+| **Chat** | `/api/v2/repositories/{id}/chat/*` | Conversational AI interface |
+| **Wiki** | `/api/v2/repositories/{id}/wiki/*` | Documentation generation |
+| **Webhooks** | `/webhooks/*` | Git provider webhook handling |
+
+### 🔧 Customization
+
+The API documentation is automatically generated from your code with:
+- **Contact Information**: support@autodoc.dev
+- **License**: MIT License
+- **Terms of Service**: https://autodoc.dev/terms
+- **Multiple Server Environments**: Local, development, and production
 
 ## 🏗️ Architecture
 
@@ -526,7 +610,18 @@ python -m src.api.main --reload
 
 # Run with debug logging
 LOG_LEVEL=DEBUG python -m src.api.main
+
+# Access interactive API documentation during development
+open http://localhost:8000/docs
 ```
+
+### API Development Workflow
+
+1. **Design First**: Use the interactive Swagger UI to design and test endpoints
+2. **Implement**: Write FastAPI route handlers with Pydantic models
+3. **Document**: Add comprehensive examples and descriptions using OpenAPI extras
+4. **Test**: Use the Swagger UI to test endpoints during development
+5. **Validate**: Ensure all examples work correctly in the documentation
 
 ## 🚀 Deployment
 

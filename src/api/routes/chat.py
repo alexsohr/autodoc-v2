@@ -46,6 +46,27 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
     "/{repository_id}/chat/sessions",
     response_model=ChatSessionResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Create a new chat session",
+    description="Create a new conversational session for asking questions about the repository codebase. The repository must be analyzed first.",
+    openapi_extra={
+        "responses": {
+            "201": {
+                "description": "Chat session created successfully",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "id": "123e4567-e89b-12d3-a456-426614174000",
+                            "repository_id": "550e8400-e29b-41d4-a716-446655440000",
+                            "created_at": "2024-01-01T12:00:00Z",
+                            "last_activity": "2024-01-01T12:00:00Z",
+                            "status": "active",
+                            "message_count": 0
+                        }
+                    }
+                }
+            }
+        }
+    }
 )
 async def create_chat_session(
     repository_id: UUID, current_user: User = Depends(get_current_user)
@@ -260,6 +281,88 @@ async def delete_chat_session(
     "/{repository_id}/chat/sessions/{session_id}/questions",
     response_model=QuestionAnswer,
     status_code=status.HTTP_201_CREATED,
+    summary="Ask a question about the codebase",
+    description="Submit a question about the repository codebase and receive an AI-generated answer with source code citations.",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "general_question": {
+                            "summary": "General Architecture Question",
+                            "description": "Ask about overall architecture or patterns",
+                            "value": {
+                                "content": "How does authentication work in this application?",
+                                "context_hint": "auth"
+                            }
+                        },
+                        "specific_function": {
+                            "summary": "Specific Function Question",
+                            "description": "Ask about a specific function or method",
+                            "value": {
+                                "content": "What does the create_user function do and what parameters does it accept?",
+                                "context_hint": "user creation"
+                            }
+                        },
+                        "debugging_help": {
+                            "summary": "Debugging Question",
+                            "description": "Ask for help understanding error handling",
+                            "value": {
+                                "content": "How are validation errors handled in the API endpoints?"
+                            }
+                        },
+                        "best_practices": {
+                            "summary": "Best Practices Question",
+                            "description": "Ask about code patterns and best practices",
+                            "value": {
+                                "content": "What testing patterns are used in this codebase?"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "responses": {
+            "201": {
+                "description": "Question answered successfully",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "question": {
+                                "id": "456e7890-e89b-12d3-a456-426614174001",
+                                "session_id": "123e4567-e89b-12d3-a456-426614174000",
+                                "content": "How does authentication work in this application?",
+                                "timestamp": "2024-01-01T12:05:00Z",
+                                "context_files": [
+                                    "src/auth/authentication.py",
+                                    "src/middleware/auth_middleware.py",
+                                    "src/models/user.py"
+                                ]
+                            },
+                            "answer": {
+                                "id": "789e1234-e89b-12d3-a456-426614174002",
+                                "question_id": "456e7890-e89b-12d3-a456-426614174001",
+                                "content": "The application uses JWT-based authentication with middleware validation. Users authenticate via the `/auth/login` endpoint which returns a JWT token. The `auth_middleware.py` validates tokens on protected routes...",
+                                "citations": [
+                                    {
+                                        "file_path": "src/auth/authentication.py",
+                                        "line_start": 15,
+                                        "line_end": 25,
+                                        "commit_sha": "abc123def456789012345678901234567890abcd",
+                                        "url": "https://github.com/myorg/myrepo/blob/main/src/auth/authentication.py#L15-L25",
+                                        "excerpt": "def authenticate_user(username: str, password: str):\\n    # JWT token generation logic\\n    ..."
+                                    }
+                                ],
+                                "confidence_score": 0.92,
+                                "generation_time": 2.3,
+                                "timestamp": "2024-01-01T12:05:02Z"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 )
 async def ask_question(
     repository_id: UUID,
