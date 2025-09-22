@@ -92,11 +92,11 @@
 - [x] T032 LangGraph workflow orchestration in src/agents/workflow.py
 
 ### Services
-- [ ] T033 [P] Authentication service in src/services/auth_service.py
-- [ ] T034 Repository service (CRUD, webhook config) in src/services/repository_service.py
-- [ ] T035 Document processing service in src/services/document_service.py
-- [ ] T036 Wiki generation service in src/services/wiki_service.py
-- [ ] T037 Chat service (sessions, Q&A) in src/services/chat_service.py
+- [x] T033 [P] Authentication service in src/services/auth_service.py
+- [x] T034 Repository service (CRUD, webhook config) in src/services/repository_service.py
+- [x] T035 Document processing service in src/services/document_service.py
+- [x] T036 Wiki generation service in src/services/wiki_service.py
+- [x] T037 Chat service (sessions, Q&A) in src/services/chat_service.py
 
 ## Phase 3.4: API Implementation
 - [ ] T038 FastAPI main application in src/api/main.py
