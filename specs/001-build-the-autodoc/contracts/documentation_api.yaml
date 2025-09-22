@@ -1,0 +1,311 @@
+openapi: 3.0.3
+info:
+  title: AutoDoc Documentation API
+  description: Generated documentation retrieval and management endpoints
+  version: 2.0.0
+
+paths:
+  /repositories/{repository_id}/wiki:
+    get:
+      summary: Get repository wiki structure
+      description: Retrieve the complete wiki structure for a repository
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: include_content
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Include page content in response
+        - name: section_id
+          in: query
+          schema:
+            type: string
+          description: Filter to specific section
+      responses:
+        '200':
+          description: Wiki structure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WikiStructure'
+        '404':
+          description: Repository not found or no wiki available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repository_id}/wiki/pages/{page_id}:
+    get:
+      summary: Get specific wiki page
+      description: Retrieve a specific wiki page with full content
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, markdown]
+            default: json
+      responses:
+        '200':
+          description: Wiki page details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WikiPageDetail'
+            text/markdown:
+              schema:
+                type: string
+        '404':
+          description: Page not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repository_id}/pull-request:
+    post:
+      summary: Create documentation pull request
+      description: Create a pull request with updated documentation
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PullRequestRequest'
+      responses:
+        '201':
+          description: Pull request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullRequestResponse'
+        '404':
+          description: Repository not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Pull request already exists or no changes to commit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repository_id}/files:
+    get:
+      summary: Get repository file list
+      description: Retrieve processed files available for semantic search
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: language
+          in: query
+          schema:
+            type: string
+          description: Filter by programming language
+        - name: path_pattern
+          in: query
+          schema:
+            type: string
+          description: Filter by file path pattern
+      responses:
+        '200':
+          description: List of processed files
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileList'
+        '404':
+          description: Repository not found or not processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    WikiStructure:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        pages:
+          type: array
+          items:
+            $ref: '#/components/schemas/WikiPageDetail'
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/WikiSection'
+        root_sections:
+          type: array
+          items:
+            type: string
+
+    WikiPageDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        importance:
+          type: string
+          enum: [high, medium, low]
+        file_paths:
+          type: array
+          items:
+            type: string
+        related_pages:
+          type: array
+          items:
+            type: string
+        content:
+          type: string
+          default: ""
+
+    WikiSection:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        pages:
+          type: array
+          items:
+            type: string
+        subsections:
+          type: array
+          items:
+            type: string
+          default: []
+
+    PullRequestRequest:
+      type: object
+      properties:
+        target_branch:
+          type: string
+          description: Target branch for pull request (defaults to default branch)
+        title:
+          type: string
+          description: Custom pull request title
+        description:
+          type: string
+          description: Custom pull request description
+        force_update:
+          type: boolean
+          default: false
+          description: Force update even if no changes detected
+
+    PullRequestResponse:
+      type: object
+      properties:
+        pull_request_url:
+          type: string
+          format: uri
+          description: URL of created pull request
+        branch_name:
+          type: string
+          description: Name of created branch
+        files_changed:
+          type: array
+          items:
+            type: string
+          description: List of files modified
+        commit_sha:
+          type: string
+          description: Commit SHA of changes
+
+    FileList:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeDocument'
+        repository_id:
+          type: string
+          format: uuid
+        total:
+          type: integer
+        languages:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Count of files per language
+
+    CodeDocument:
+      type: object
+      properties:
+        id:
+          type: string
+        repository_id:
+          type: string
+          format: uuid
+        file_path:
+          type: string
+        language:
+          type: string
+        metadata:
+          type: object
+          properties:
+            size:
+              type: integer
+            last_modified:
+              type: string
+              format: date-time
+            lines:
+              type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true

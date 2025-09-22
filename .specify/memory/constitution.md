@@ -1,11 +1,12 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 → 1.1.0
+- Version change: 1.1.0 → 1.1.1
 - Modified principles: none
-- Added sections: Technology Stack Requirements; Environment Configuration Standards
+- Added sections: none
 - Removed sections: none
+- Updated sections: Environment Configuration Standards (development environment database)
 - Templates requiring updates:
-  - .specify/templates/plan-template.md: ✅ updated (version reference updated to 1.1.0)
+  - .specify/templates/plan-template.md: ✅ updated (version reference updated to 1.1.1)
   - .specify/templates/spec-template.md: ✅ aligned (no changes required)
   - .specify/templates/tasks-template.md: ✅ aligned (no changes required)
   - .specify/templates/commands/*: ⚠ not present in repository
@@ -142,8 +143,8 @@ Development and production environments MUST follow these configurations:
 ### Development Environment
 - **Repository Storage**: Local filesystem MUST be used for cloning and storing
   repositories. Path: `./data/repos/` with organization/project structure.
-- **Vector Database**: ChromaDB MUST be used for embeddings and semantic search.
-  Local persistent storage in `./data/chroma/` directory.
+- **Primary Database**: Local MongoDB MUST be used for all persistent data and
+  vector storage. Connection string: `mongodb://localhost:27017/autodoc_dev`.
 - **Configuration**: Environment variables via `.env` file; sensitive values
   MUST NOT be committed to version control.
 
@@ -151,9 +152,7 @@ Development and production environments MUST follow these configurations:
 - **Repository Storage**: AWS S3 MUST be used for cloning and storing repositories.
   Bucket structure: `{bucket}/repos/{org}/{project}/{branch}/`.
 - **Primary Database**: MongoDB MUST be used for all persistent data (metadata,
-  analysis results, user data). Connection pooling and replica sets required.
-- **Vector Database**: Production-grade ChromaDB deployment or equivalent vector
-  store with backup and recovery procedures.
+  analysis results, user data) and vector storage. Connection pooling and replica sets required.
 - **Configuration**: AWS Systems Manager Parameter Store or equivalent for
   configuration management. Secrets rotation policies required.
 
@@ -188,4 +187,4 @@ Development and production environments MUST follow these configurations:
   - Per-PR: Constitution Check in plans and CI gates MUST pass.
   - Quarterly: Audit selected features for adherence to principles and SLOs.
 
-**Version**: 1.1.0 | **Ratified**: TODO(RATIFICATION_DATE) | **Last Amended**: 2025-09-21
+**Version**: 1.1.1 | **Ratified**: TODO(RATIFICATION_DATE) | **Last Amended**: 2025-09-22

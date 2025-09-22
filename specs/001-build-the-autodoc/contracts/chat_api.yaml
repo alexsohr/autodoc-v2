@@ -1,0 +1,380 @@
+openapi: 3.0.3
+info:
+  title: AutoDoc Chat API
+  description: Conversational interface for querying repository knowledge
+  version: 2.0.0
+
+paths:
+  /repositories/{repository_id}/chat/sessions:
+    post:
+      summary: Create chat session
+      description: Start a new conversational session for a repository
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Chat session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatSession'
+        '404':
+          description: Repository not found or not analyzed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      summary: List chat sessions
+      description: Retrieve active chat sessions for a repository
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, expired]
+            default: active
+      responses:
+        '200':
+          description: List of chat sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatSessionList'
+
+  /repositories/{repository_id}/chat/sessions/{session_id}:
+    get:
+      summary: Get chat session
+      description: Retrieve details of a specific chat session
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chat session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatSession'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: End chat session
+      description: Explicitly end a chat session
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Session ended successfully
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repository_id}/chat/sessions/{session_id}/questions:
+    post:
+      summary: Ask question
+      description: Submit a question about the repository codebase
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionRequest'
+      responses:
+        '201':
+          description: Question submitted and answer generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionAnswer'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '400':
+          description: Invalid question format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repository_id}/chat/sessions/{session_id}/stream:
+    get:
+      summary: Stream chat responses
+      description: Server-sent events stream for real-time chat responses
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: SSE stream of chat events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-sent events stream
+
+  /repositories/{repository_id}/chat/sessions/{session_id}/history:
+    get:
+      summary: Get conversation history
+      description: Retrieve the conversation history for a chat session
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: before
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Get messages before this timestamp
+      responses:
+        '200':
+          description: Conversation history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationHistory'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    ChatSession:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        repository_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        last_activity:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, expired]
+        message_count:
+          type: integer
+          description: Number of questions in this session
+
+    ChatSessionList:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatSession'
+        total:
+          type: integer
+
+    QuestionRequest:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          description: The question to ask about the codebase
+          example: "How does user authentication work in this codebase?"
+        context_hint:
+          type: string
+          description: Optional hint about what part of codebase to focus on
+          example: "authentication, login, security"
+
+    QuestionAnswer:
+      type: object
+      properties:
+        question:
+          $ref: '#/components/schemas/Question'
+        answer:
+          $ref: '#/components/schemas/Answer'
+
+    Question:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        context_files:
+          type: array
+          items:
+            type: string
+          description: File paths used for context via semantic search
+
+    Answer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        question_id:
+          type: string
+          format: uuid
+        content:
+          type: string
+          description: The generated answer
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+        confidence_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Answer confidence score
+        generation_time:
+          type: number
+          description: Response generation time in seconds
+        timestamp:
+          type: string
+          format: date-time
+
+    Citation:
+      type: object
+      properties:
+        file_path:
+          type: string
+          description: Path to referenced file
+        line_start:
+          type: integer
+          nullable: true
+          description: Starting line number
+        line_end:
+          type: integer
+          nullable: true
+          description: Ending line number
+        commit_sha:
+          type: string
+          description: Commit SHA of referenced code
+        url:
+          type: string
+          format: uri
+          description: Direct link to source code
+        excerpt:
+          type: string
+          nullable: true
+          description: Relevant code snippet
+
+    ConversationHistory:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        questions_and_answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionAnswer'
+        total:
+          type: integer
+        has_more:
+          type: boolean
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
