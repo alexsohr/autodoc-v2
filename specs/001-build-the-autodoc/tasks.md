@@ -52,18 +52,18 @@
 **CRITICAL: These tests MUST be written and MUST FAIL before ANY implementation**
 
 ### Contract Tests
-- [ ] T007 [P] Contract test repository API endpoints in tests/contract/test_repository_api.py
-- [ ] T008 [P] Contract test documentation/wiki API endpoints in tests/contract/test_documentation_api.py
-- [ ] T009 [P] Contract test chat API endpoints in tests/contract/test_chat_api.py
-- [ ] T010 [P] Contract test webhook endpoints in tests/contract/test_webhook_api.py
+- [x] T007 [P] Contract test repository API endpoints in tests/contract/test_repository_api.py
+- [x] T008 [P] Contract test documentation/wiki API endpoints in tests/contract/test_documentation_api.py
+- [x] T009 [P] Contract test chat API endpoints in tests/contract/test_chat_api.py
+- [x] T010 [P] Contract test webhook endpoints in tests/contract/test_webhook_api.py
 
 ### Integration Tests
-- [ ] T011 [P] Integration test repository registration workflow in tests/integration/test_repository_registration.py
-- [ ] T012 [P] Integration test document analysis workflow in tests/integration/test_document_analysis.py
-- [ ] T013 [P] Integration test wiki generation workflow in tests/integration/test_wiki_generation.py
-- [ ] T014 [P] Integration test chat query workflow in tests/integration/test_chat_workflow.py
-- [ ] T015 [P] Integration test webhook processing workflow in tests/integration/test_webhook_processing.py
-- [ ] T016 [P] Integration test semantic search and RAG in tests/integration/test_semantic_search.py
+- [x] T011 [P] Integration test repository registration workflow in tests/integration/test_repository_registration.py
+- [x] T012 [P] Integration test document analysis workflow in tests/integration/test_document_analysis.py
+- [x] T013 [P] Integration test wiki generation workflow in tests/integration/test_wiki_generation.py
+- [x] T014 [P] Integration test chat query workflow in tests/integration/test_chat_workflow.py
+- [x] T015 [P] Integration test webhook processing workflow in tests/integration/test_webhook_processing.py
+- [x] T016 [P] Integration test semantic search and RAG in tests/integration/test_semantic_search.py
 
 ## Phase 3.3: Core Implementation (ONLY after tests are failing)
 

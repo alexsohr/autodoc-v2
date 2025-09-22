@@ -54,7 +54,7 @@ class DatabaseManager:
     
     async def initialize_database(self) -> None:
         """Initialize database collections and indexes"""
-        if not self.database:
+        if self.database is None:
             raise RuntimeError("Database not connected")
         
         try:
@@ -219,7 +219,7 @@ class DatabaseManager:
     
     def get_collection(self, collection_name: str):
         """Get a collection by name"""
-        if not self.database:
+        if self.database is None:
             raise RuntimeError("Database not connected")
         return self.database[collection_name]
 
@@ -230,7 +230,7 @@ db_manager = DatabaseManager()
 
 async def get_database() -> AsyncIOMotorDatabase:
     """Get database instance"""
-    if not db_manager.database:
+    if db_manager.database is None:
         await db_manager.connect()
     return db_manager.database
 

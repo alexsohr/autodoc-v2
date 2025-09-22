@@ -3,8 +3,8 @@
 import os
 from typing import Optional, List, Dict, Any
 from enum import Enum
-from pydantic import BaseSettings, Field, validator
-from pydantic_settings import SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Environment(str, Enum):
@@ -163,14 +163,16 @@ class Settings(BaseSettings):
     reload: bool = Field(default=True, description="Auto-reload on changes")
     workers: int = Field(default=1, description="Number of workers")
     
-    @validator("cors_origins", pre=True)
+    @field_validator("cors_origins", mode="before")
+    @classmethod
     def parse_cors_origins(cls, v):
         """Parse CORS origins from string or list"""
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
         return v
     
-    @validator("supported_languages", pre=True)
+    @field_validator("supported_languages", mode="before")
+    @classmethod
     def parse_supported_languages(cls, v):
         """Parse supported languages from string or list"""
         if isinstance(v, str):

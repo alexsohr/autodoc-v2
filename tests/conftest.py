@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.api.main import create_app
+from unittest.mock import patch
 
 
 @pytest.fixture(scope="session")
@@ -25,8 +26,11 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 @pytest.fixture
 def test_app():
     """Create a test FastAPI application"""
-    app = create_app()
-    return app
+    # Mock database operations for testing
+    with patch('src.utils.database.init_database'), \
+         patch('src.utils.database.close_database'):
+        app = create_app()
+        return app
 
 
 @pytest.fixture
