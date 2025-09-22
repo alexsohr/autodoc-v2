@@ -13,9 +13,11 @@ from fastapi.responses import JSONResponse
 
 from ...models.config import LLMConfig, StorageConfig
 from ...models.repository import (
+    AnalysisStatus,
     Repository,
     RepositoryCreate,
     RepositoryList,
+    RepositoryProvider,
     RepositoryResponse,
     RepositoryUpdate,
 )
@@ -213,15 +215,18 @@ async def list_repositories(
         50, ge=1, le=100, description="Number of repositories to return"
     ),
     offset: int = Query(0, ge=0, description="Number of repositories to skip"),
-    status: Optional[str] = Query(None, description="Filter by analysis status (pending, processing, completed, failed)"),
-    provider: Optional[str] = Query(None, description="Filter by repository provider (github, gitlab, bitbucket)"),
+    status: Optional[AnalysisStatus] = Query(None, description="Filter by analysis status"),
+    provider: Optional[RepositoryProvider] = Query(None, description="Filter by repository provider"),
     current_user: User = Depends(get_current_user),
 ):
     """List repositories with pagination and filtering"""
     try:
         # Get repositories using service
         result = await repository_service.list_repositories(
-            limit=limit, offset=offset, status_filter=status, provider_filter=provider
+            limit=limit, 
+            offset=offset, 
+            status_filter=status.value if status else None, 
+            provider_filter=provider.value if provider else None
         )
 
         if result["status"] != "success":
