@@ -68,28 +68,28 @@
 ## Phase 3.3: Core Implementation (ONLY after tests are failing)
 
 ### Data Models
-- [ ] T017 [P] Repository model with webhook fields in src/models/repository.py
-- [ ] T018 [P] CodeDocument model in src/models/code_document.py
-- [ ] T019 [P] WikiStructure, WikiPageDetail, WikiSection models in src/models/wiki.py
-- [ ] T020 [P] ChatSession, Question, Answer, Citation models in src/models/chat.py
-- [ ] T021 [P] LLMConfig and StorageConfig models in src/models/config.py
+- [x] T017 [P] Repository model with webhook fields in src/models/repository.py
+- [x] T018 [P] CodeDocument model in src/models/code_document.py
+- [x] T019 [P] WikiStructure, WikiPageDetail, WikiSection models in src/models/wiki.py
+- [x] T020 [P] ChatSession, Question, Answer, Citation models in src/models/chat.py
+- [x] T021 [P] LLMConfig and StorageConfig models in src/models/config.py
 
 ### Storage Adapters
-- [ ] T022 [P] Storage adapter interface in src/utils/storage_adapters.py
-- [ ] T023 [P] Local filesystem storage adapter in src/utils/local_storage.py
-- [ ] T024 [P] AWS S3 storage adapter in src/utils/s3_storage.py
-- [ ] T025 [P] MongoDB adapter with vector search in src/utils/mongodb_adapter.py
+- [x] T022 [P] Storage adapter interface in src/utils/storage_adapters.py
+- [x] T023 [P] Local filesystem storage adapter in src/utils/local_storage.py
+- [x] T024 [P] AWS S3 storage adapter in src/utils/s3_storage.py
+- [x] T025 [P] MongoDB adapter with vector search in src/utils/mongodb_adapter.py
 
 ### LangGraph Tools
-- [ ] T026 [P] Repository tool (clone, analyze) in src/tools/repository_tool.py
-- [ ] T027 [P] Embedding tool (generate, store) in src/tools/embedding_tool.py
-- [ ] T028 [P] Context retrieval tool (semantic search) in src/tools/context_tool.py
-- [ ] T029 [P] LLM provider tool (multi-provider) in src/tools/llm_tool.py
+- [x] T026 [P] Repository tool (clone, analyze) in src/tools/repository_tool.py
+- [x] T027 [P] Embedding tool (generate, store) in src/tools/embedding_tool.py
+- [x] T028 [P] Context retrieval tool (semantic search) in src/tools/context_tool.py
+- [x] T029 [P] LLM provider tool (multi-provider) in src/tools/llm_tool.py
 
 ### LangGraph Agents
-- [ ] T030 [P] Document processing agent in src/agents/document_agent.py
-- [ ] T031 [P] Wiki generation agent in src/agents/wiki_agent.py
-- [ ] T032 LangGraph workflow orchestration in src/agents/workflow.py
+- [x] T030 [P] Document processing agent in src/agents/document_agent.py
+- [x] T031 [P] Wiki generation agent in src/agents/wiki_agent.py
+- [x] T032 LangGraph workflow orchestration in src/agents/workflow.py
 
 ### Services
 - [ ] T033 [P] Authentication service in src/services/auth_service.py
