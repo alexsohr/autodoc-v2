@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
 
 
 class PageImportance(str, Enum):
@@ -44,11 +44,10 @@ class WikiPageDetail(BaseModel):
     # Content
     content: str = Field(default="", description="Generated markdown content")
 
-    class Config:
-        """Pydantic configuration"""
-
-        validate_assignment = True
-        use_enum_values = True
+    model_config = ConfigDict(
+        validate_assignment=True,
+        use_enum_values=True
+    )
 
     @field_validator("id")
     @classmethod
@@ -174,10 +173,9 @@ class WikiSection(BaseModel):
     )
     subsections: List[str] = Field(default_factory=list, description="Subsection IDs")
 
-    class Config:
-        """Pydantic configuration"""
-
-        validate_assignment = True
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
     @field_validator("id")
     @classmethod
@@ -304,10 +302,9 @@ class WikiStructure(BaseModel):
         default_factory=list, description="Top-level section IDs"
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        validate_assignment = True
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
     @field_validator("id")
     @classmethod
@@ -517,7 +514,4 @@ class PullRequestResponse(BaseModel):
     files_changed: List[str] = Field(description="List of files modified")
     commit_sha: str = Field(description="Commit SHA of changes")
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {datetime: lambda dt: dt.isoformat()}
+    model_config = ConfigDict()

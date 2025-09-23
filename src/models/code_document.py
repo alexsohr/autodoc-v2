@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer
 
 
 class CodeDocument(BaseModel):
@@ -45,11 +45,19 @@ class CodeDocument(BaseModel):
         description="Last update timestamp",
     )
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
+    @field_serializer('updated_at')
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime to ISO format"""
+        return value.isoformat()
+    
+    @field_serializer('id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
     @field_validator("file_path")
     @classmethod
@@ -252,10 +260,17 @@ class CodeDocumentResponse(BaseModel):
     updated_at: datetime = Field(description="Last update timestamp")
     has_embedding: bool = Field(description="Whether document has embedding")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict()
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime to ISO format"""
+        return value.isoformat()
+    
+    @field_serializer('repository_id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
     @classmethod
     def from_code_document(cls, doc: CodeDocument) -> "CodeDocumentResponse":
@@ -280,10 +295,12 @@ class FileList(BaseModel):
     total: int = Field(description="Total number of files")
     languages: Dict[str, int] = Field(description="Count of files per language")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict()
 
-        json_encoders = {UUID: str}
+    @field_serializer('repository_id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
 
 class DocumentSearchResult(BaseModel):
@@ -295,10 +312,7 @@ class DocumentSearchResult(BaseModel):
         default=None, description="Highlighted text snippets"
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {UUID: str}
+    model_config = ConfigDict()
 
 
 class DocumentSearchResponse(BaseModel):
@@ -309,7 +323,4 @@ class DocumentSearchResponse(BaseModel):
     total_results: int = Field(description="Total number of results")
     search_time: float = Field(description="Search time in seconds")
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {UUID: str}
+    model_config = ConfigDict()

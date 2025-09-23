@@ -124,8 +124,10 @@ class WikiGenerationAgent:
 
         # Error handling
         workflow.add_edge("handle_error", END)
-
-        return workflow.compile()
+        
+        app = workflow.compile()
+        logger.debug(f"Wiki generation workflow:\n {app.get_graph().draw_mermaid()}")
+        return app
 
     def _load_structure_prompt(self) -> str:
         """Load wiki structure generation prompt"""

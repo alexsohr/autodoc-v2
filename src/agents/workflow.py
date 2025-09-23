@@ -147,7 +147,9 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        return workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory)
+        logger.debug(f"Full analysis workflow:\n {app.get_graph().draw_mermaid()}")
+        return app
 
     def _create_document_processing_workflow(self) -> StateGraph:
         """Create document processing only workflow"""
@@ -164,7 +166,9 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        return workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory)
+        logger.debug(f"Document processing workflow:\n {app.get_graph().draw_mermaid()}")
+        return app
 
     def _create_wiki_generation_workflow(self) -> StateGraph:
         """Create wiki generation only workflow"""
@@ -181,7 +185,9 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        return workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory)
+        logger.debug(f"Wiki generation workflow:\n {app.get_graph().draw_mermaid()}")
+        return app
 
     def _create_incremental_update_workflow(self) -> StateGraph:
         """Create incremental update workflow"""
@@ -202,7 +208,9 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        return workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory)
+        logger.debug(f"Incremental update workflow:\n {app.get_graph().draw_mermaid()}")
+        return app
 
     def _create_chat_response_workflow(self) -> StateGraph:
         """Create chat response workflow"""
@@ -219,7 +227,9 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        return workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory)
+        logger.debug(f"Chat response workflow:\n {app.get_graph().draw_mermaid()}")
+        return app
 
     async def execute_workflow(
         self,

@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
 
 
 class SessionStatus(str, Enum):
@@ -38,10 +38,9 @@ class Citation(BaseModel):
     # Content excerpt
     excerpt: Optional[str] = Field(default=None, description="Relevant code snippet")
 
-    class Config:
-        """Pydantic configuration"""
-
-        validate_assignment = True
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
     @field_validator("file_path")
     @classmethod
@@ -163,11 +162,19 @@ class Answer(BaseModel):
         description="Answer timestamp",
     )
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
+    @field_serializer('timestamp')
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime to ISO format"""
+        return value.isoformat()
+    
+    @field_serializer('id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
     @field_validator("content")
     @classmethod
@@ -243,11 +250,19 @@ class Question(BaseModel):
         default_factory=list, description="Relevant analysis node IDs used for context"
     )
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
+    @field_serializer('timestamp')
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime to ISO format"""
+        return value.isoformat()
+    
+    @field_serializer('id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
     @field_validator("content")
     @classmethod
@@ -302,12 +317,20 @@ class ChatSession(BaseModel):
         default=0, description="Number of questions in this session"
     )
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict(
+        validate_assignment=True,
+        use_enum_values=True
+    )
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
-        use_enum_values = True
+    @field_serializer('created_at', 'last_activity')
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime to ISO format"""
+        return value.isoformat()
+    
+    @field_serializer('id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
     @field_validator("message_count")
     @classmethod
@@ -382,10 +405,17 @@ class QuestionResponse(BaseModel):
         description="File paths used for context via semantic search"
     )
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict()
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
+    @field_serializer('timestamp')
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime to ISO format"""
+        return value.isoformat()
+    
+    @field_serializer('id', 'session_id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
 
 class AnswerResponse(BaseModel):
@@ -399,10 +429,17 @@ class AnswerResponse(BaseModel):
     generation_time: float = Field(description="Response generation time in seconds")
     timestamp: datetime = Field(description="Answer timestamp")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict()
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
+    @field_serializer('timestamp')
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime to ISO format"""
+        return value.isoformat()
+    
+    @field_serializer('id', 'question_id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
 
 class QuestionAnswer(BaseModel):
@@ -422,11 +459,19 @@ class ChatSessionResponse(BaseModel):
     status: SessionStatus = Field(description="Session status")
     message_count: int = Field(description="Number of questions in this session")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict(
+        use_enum_values=True
+    )
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        use_enum_values = True
+    @field_serializer('created_at', 'last_activity')
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime to ISO format"""
+        return value.isoformat()
+    
+    @field_serializer('id', 'repository_id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)
 
 
 class ChatSessionList(BaseModel):
@@ -435,10 +480,12 @@ class ChatSessionList(BaseModel):
     sessions: List[ChatSessionResponse] = Field(description="List of chat sessions")
     total: int = Field(description="Total number of sessions")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict()
 
-        json_encoders = {UUID: str}
+    @field_serializer('sessions')
+    def serialize_sessions(self, value: List[ChatSessionResponse]) -> List[Dict[str, Any]]:
+        """Serialize sessions ensuring UUIDs are properly handled"""
+        return [session.model_dump() for session in value]
 
 
 class ConversationHistory(BaseModel):
@@ -451,7 +498,9 @@ class ConversationHistory(BaseModel):
     total: int = Field(description="Total number of Q&A pairs")
     has_more: bool = Field(description="Whether there are more results")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict()
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
+    @field_serializer('session_id')
+    def serialize_uuid(self, value: UUID) -> str:
+        """Serialize UUID to string"""
+        return str(value)

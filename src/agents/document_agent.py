@@ -84,8 +84,9 @@ class DocumentProcessingAgent:
 
         # Error handling
         workflow.add_edge("handle_error", "cleanup")
-
-        return workflow.compile()
+        app = workflow.compile()
+        logger.debug(f"Document processing workflow:\n {app.get_graph().draw_mermaid()}")
+        return app
 
     async def process_repository(
         self, repository_id: str, repository_url: str, branch: Optional[str] = None
