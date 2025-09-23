@@ -58,7 +58,7 @@ class LLMConfig(BaseModel):
     )
     
     @field_serializer('api_key')
-    def serialize_api_key(self, value: SecretStr) -> str:
+    def serialize_api_key(self, value: SecretStr) -> str | None:
         """Serialize SecretStr for JSON output"""
         return value.get_secret_value() if value else None
 

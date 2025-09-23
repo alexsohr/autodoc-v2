@@ -6,10 +6,10 @@ ChatSession, Question, Answer, and Citation based on data-model.md.
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .base import BaseSerializers
 
@@ -426,11 +426,6 @@ class ChatSessionList(BaseModel):
     total: int = Field(description="Total number of sessions")
 
     model_config = ConfigDict()
-
-    @field_serializer('sessions')
-    def serialize_sessions(self, value: List[ChatSessionResponse]) -> List[Dict[str, Any]]:
-        """Serialize sessions ensuring UUIDs are properly handled"""
-        return [session.model_dump() for session in value]
 
 
 class ConversationHistory(BaseSerializers):
