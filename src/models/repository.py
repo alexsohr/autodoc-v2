@@ -10,7 +10,9 @@ from enum import Enum
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
+
+from .base import BaseSerializers
 
 
 class RepositoryProvider(str, Enum):
@@ -37,7 +39,7 @@ class AnalysisStatus(str, Enum):
     FAILED = "failed"
 
 
-class Repository(BaseModel):
+class Repository(BaseSerializers):
     """Repository model with webhook fields
 
     Represents a source code repository being analyzed by AutoDoc.
@@ -88,12 +90,10 @@ class Repository(BaseModel):
         description="Last update timestamp",
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
-        use_enum_values = True
+    model_config = ConfigDict(
+        validate_assignment=True,
+        use_enum_values=True
+    )
 
     @field_validator("url")
     @classmethod
@@ -300,12 +300,13 @@ class RepositoryUpdate(BaseModel):
 
 class RepositoryResponse(Repository):
     """Repository response model for API responses"""
-
-    class Config(Repository.Config):
-        """Pydantic configuration for responses"""
-
-        # Exclude sensitive fields from API responses
-        fields = {"webhook_secret": {"write_only": True}}
+    
+    # Override webhook_secret to exclude it from serialization (write-only behavior)
+    webhook_secret: Optional[str] = Field(
+        default=None, 
+        description="Secret for validating webhook signatures",
+        exclude=True  # Excludes from serialization, equivalent to write_only in V1
+    )
 
 
 class RepositoryList(BaseModel):

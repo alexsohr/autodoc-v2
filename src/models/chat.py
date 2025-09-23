@@ -6,10 +6,12 @@ ChatSession, Question, Answer, and Citation based on data-model.md.
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .base import BaseSerializers
 
 
 class SessionStatus(str, Enum):
@@ -38,10 +40,9 @@ class Citation(BaseModel):
     # Content excerpt
     excerpt: Optional[str] = Field(default=None, description="Relevant code snippet")
 
-    class Config:
-        """Pydantic configuration"""
-
-        validate_assignment = True
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
     @field_validator("file_path")
     @classmethod
@@ -136,7 +137,7 @@ class Citation(BaseModel):
         )
 
 
-class Answer(BaseModel):
+class Answer(BaseSerializers):
     """AI-generated response to user question
 
     Contains the generated answer with citations, confidence metrics,
@@ -163,11 +164,9 @@ class Answer(BaseModel):
         description="Answer timestamp",
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
     @field_validator("content")
     @classmethod
@@ -220,7 +219,7 @@ class Answer(BaseModel):
         return f"Answer(id={self.id}, question_id={self.question_id}, confidence={self.confidence_score:.2f})"
 
 
-class Question(BaseModel):
+class Question(BaseSerializers):
     """User query about the codebase
 
     Represents a user's question with context and metadata
@@ -243,11 +242,9 @@ class Question(BaseModel):
         default_factory=list, description="Relevant analysis node IDs used for context"
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
     @field_validator("content")
     @classmethod
@@ -273,7 +270,7 @@ class Question(BaseModel):
         return f"Question(id={self.id}, session_id={self.session_id})"
 
 
-class ChatSession(BaseModel):
+class ChatSession(BaseSerializers):
     """Conversational query session for a repository
 
     Manages a conversation session with state tracking
@@ -302,12 +299,10 @@ class ChatSession(BaseModel):
         default=0, description="Number of questions in this session"
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
-        use_enum_values = True
+    model_config = ConfigDict(
+        validate_assignment=True,
+        use_enum_values=True
+    )
 
     @field_validator("message_count")
     @classmethod
@@ -371,7 +366,7 @@ class QuestionRequest(BaseModel):
         return v.strip()
 
 
-class QuestionResponse(BaseModel):
+class QuestionResponse(BaseSerializers):
     """Question response model for API"""
 
     id: UUID = Field(description="Question ID")
@@ -382,13 +377,11 @@ class QuestionResponse(BaseModel):
         description="File paths used for context via semantic search"
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
+    model_config = ConfigDict()
 
 
-class AnswerResponse(BaseModel):
+
+class AnswerResponse(BaseSerializers):
     """Answer response model for API"""
 
     id: UUID = Field(description="Answer ID")
@@ -399,10 +392,8 @@ class AnswerResponse(BaseModel):
     generation_time: float = Field(description="Response generation time in seconds")
     timestamp: datetime = Field(description="Answer timestamp")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict()
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
 
 
 class QuestionAnswer(BaseModel):
@@ -412,7 +403,7 @@ class QuestionAnswer(BaseModel):
     answer: AnswerResponse = Field(description="Answer details")
 
 
-class ChatSessionResponse(BaseModel):
+class ChatSessionResponse(BaseSerializers):
     """Chat session response model for API"""
 
     id: UUID = Field(description="Session ID")
@@ -422,11 +413,10 @@ class ChatSessionResponse(BaseModel):
     status: SessionStatus = Field(description="Session status")
     message_count: int = Field(description="Number of questions in this session")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict(
+        use_enum_values=True
+    )
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        use_enum_values = True
 
 
 class ChatSessionList(BaseModel):
@@ -435,13 +425,10 @@ class ChatSessionList(BaseModel):
     sessions: List[ChatSessionResponse] = Field(description="List of chat sessions")
     total: int = Field(description="Total number of sessions")
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {UUID: str}
+    model_config = ConfigDict()
 
 
-class ConversationHistory(BaseModel):
+class ConversationHistory(BaseSerializers):
     """Conversation history response model"""
 
     session_id: UUID = Field(description="Session ID")
@@ -451,7 +438,5 @@ class ConversationHistory(BaseModel):
     total: int = Field(description="Total number of Q&A pairs")
     has_more: bool = Field(description="Whether there are more results")
 
-    class Config:
-        """Pydantic configuration"""
+    model_config = ConfigDict()
 
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}

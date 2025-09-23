@@ -9,10 +9,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer
+
+from .base import BaseSerializers
 
 
-class CodeDocument(BaseModel):
+class CodeDocument(BaseSerializers):
     """CodeDocument model for processed code files
 
     Represents a processed code file for semantic search and analysis.
@@ -45,11 +47,9 @@ class CodeDocument(BaseModel):
         description="Last update timestamp",
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
-        validate_assignment = True
+    model_config = ConfigDict(
+        validate_assignment=True
+    )
 
     @field_validator("file_path")
     @classmethod
@@ -240,7 +240,7 @@ class CodeDocumentUpdate(BaseModel):
     )
 
 
-class CodeDocumentResponse(BaseModel):
+class CodeDocumentResponse(BaseSerializers):
     """CodeDocument response model for API responses"""
 
     id: str = Field(description="Document identifier")
@@ -252,10 +252,7 @@ class CodeDocumentResponse(BaseModel):
     updated_at: datetime = Field(description="Last update timestamp")
     has_embedding: bool = Field(description="Whether document has embedding")
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {datetime: lambda dt: dt.isoformat(), UUID: str}
+    model_config = ConfigDict()
 
     @classmethod
     def from_code_document(cls, doc: CodeDocument) -> "CodeDocumentResponse":
@@ -272,7 +269,7 @@ class CodeDocumentResponse(BaseModel):
         )
 
 
-class FileList(BaseModel):
+class FileList(BaseSerializers):
     """File list response model"""
 
     files: List[CodeDocumentResponse] = Field(description="List of processed files")
@@ -280,10 +277,7 @@ class FileList(BaseModel):
     total: int = Field(description="Total number of files")
     languages: Dict[str, int] = Field(description="Count of files per language")
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {UUID: str}
+    model_config = ConfigDict()
 
 
 class DocumentSearchResult(BaseModel):
@@ -295,10 +289,7 @@ class DocumentSearchResult(BaseModel):
         default=None, description="Highlighted text snippets"
     )
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {UUID: str}
+    model_config = ConfigDict()
 
 
 class DocumentSearchResponse(BaseModel):
@@ -309,7 +300,4 @@ class DocumentSearchResponse(BaseModel):
     total_results: int = Field(description="Total number of results")
     search_time: float = Field(description="Search time in seconds")
 
-    class Config:
-        """Pydantic configuration"""
-
-        json_encoders = {UUID: str}
+    model_config = ConfigDict()
