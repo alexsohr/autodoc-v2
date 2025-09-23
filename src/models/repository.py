@@ -12,6 +12,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
 
+from .base import BaseSerializers
+
 
 class RepositoryProvider(str, Enum):
     """Repository provider types"""
@@ -37,7 +39,7 @@ class AnalysisStatus(str, Enum):
     FAILED = "failed"
 
 
-class Repository(BaseModel):
+class Repository(BaseSerializers):
     """Repository model with webhook fields
 
     Represents a source code repository being analyzed by AutoDoc.
@@ -92,16 +94,6 @@ class Repository(BaseModel):
         validate_assignment=True,
         use_enum_values=True
     )
-
-    @field_serializer('created_at', 'updated_at', 'last_analyzed', 'last_webhook_event')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
     @field_validator("url")
     @classmethod

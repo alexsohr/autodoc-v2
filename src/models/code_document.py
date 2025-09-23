@@ -11,8 +11,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer
 
+from .base import BaseSerializers
 
-class CodeDocument(BaseModel):
+
+class CodeDocument(BaseSerializers):
     """CodeDocument model for processed code files
 
     Represents a processed code file for semantic search and analysis.
@@ -48,16 +50,6 @@ class CodeDocument(BaseModel):
     model_config = ConfigDict(
         validate_assignment=True
     )
-
-    @field_serializer('created_at', 'updated_at')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('repository_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
     @field_validator("file_path")
     @classmethod
@@ -248,7 +240,7 @@ class CodeDocumentUpdate(BaseModel):
     )
 
 
-class CodeDocumentResponse(BaseModel):
+class CodeDocumentResponse(BaseSerializers):
     """CodeDocument response model for API responses"""
 
     id: str = Field(description="Document identifier")
@@ -261,16 +253,6 @@ class CodeDocumentResponse(BaseModel):
     has_embedding: bool = Field(description="Whether document has embedding")
 
     model_config = ConfigDict()
-
-    @field_serializer('created_at', 'updated_at')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('repository_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
     @classmethod
     def from_code_document(cls, doc: CodeDocument) -> "CodeDocumentResponse":
@@ -287,7 +269,7 @@ class CodeDocumentResponse(BaseModel):
         )
 
 
-class FileList(BaseModel):
+class FileList(BaseSerializers):
     """File list response model"""
 
     files: List[CodeDocumentResponse] = Field(description="List of processed files")
@@ -296,11 +278,6 @@ class FileList(BaseModel):
     languages: Dict[str, int] = Field(description="Count of files per language")
 
     model_config = ConfigDict()
-
-    @field_serializer('repository_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
 
 class DocumentSearchResult(BaseModel):

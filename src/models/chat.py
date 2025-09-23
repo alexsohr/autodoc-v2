@@ -11,6 +11,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
 
+from .base import BaseSerializers
+
 
 class SessionStatus(str, Enum):
     """Chat session status"""
@@ -135,7 +137,7 @@ class Citation(BaseModel):
         )
 
 
-class Answer(BaseModel):
+class Answer(BaseSerializers):
     """AI-generated response to user question
 
     Contains the generated answer with citations, confidence metrics,
@@ -165,16 +167,6 @@ class Answer(BaseModel):
     model_config = ConfigDict(
         validate_assignment=True
     )
-
-    @field_serializer('timestamp')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('id', 'question_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
     @field_validator("content")
     @classmethod
@@ -227,7 +219,7 @@ class Answer(BaseModel):
         return f"Answer(id={self.id}, question_id={self.question_id}, confidence={self.confidence_score:.2f})"
 
 
-class Question(BaseModel):
+class Question(BaseSerializers):
     """User query about the codebase
 
     Represents a user's question with context and metadata
@@ -254,16 +246,6 @@ class Question(BaseModel):
         validate_assignment=True
     )
 
-    @field_serializer('timestamp')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('id', 'session_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
-
     @field_validator("content")
     @classmethod
     def validate_content(cls, v: str) -> str:
@@ -288,7 +270,7 @@ class Question(BaseModel):
         return f"Question(id={self.id}, session_id={self.session_id})"
 
 
-class ChatSession(BaseModel):
+class ChatSession(BaseSerializers):
     """Conversational query session for a repository
 
     Manages a conversation session with state tracking
@@ -321,16 +303,6 @@ class ChatSession(BaseModel):
         validate_assignment=True,
         use_enum_values=True
     )
-
-    @field_serializer('created_at', 'last_activity')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('id', 'repository_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
     @field_validator("message_count")
     @classmethod
@@ -394,7 +366,7 @@ class QuestionRequest(BaseModel):
         return v.strip()
 
 
-class QuestionResponse(BaseModel):
+class QuestionResponse(BaseSerializers):
     """Question response model for API"""
 
     id: UUID = Field(description="Question ID")
@@ -407,18 +379,9 @@ class QuestionResponse(BaseModel):
 
     model_config = ConfigDict()
 
-    @field_serializer('timestamp')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('id', 'session_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
 
-class AnswerResponse(BaseModel):
+class AnswerResponse(BaseSerializers):
     """Answer response model for API"""
 
     id: UUID = Field(description="Answer ID")
@@ -431,15 +394,6 @@ class AnswerResponse(BaseModel):
 
     model_config = ConfigDict()
 
-    @field_serializer('timestamp')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('id', 'question_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
 
 class QuestionAnswer(BaseModel):
@@ -449,7 +403,7 @@ class QuestionAnswer(BaseModel):
     answer: AnswerResponse = Field(description="Answer details")
 
 
-class ChatSessionResponse(BaseModel):
+class ChatSessionResponse(BaseSerializers):
     """Chat session response model for API"""
 
     id: UUID = Field(description="Session ID")
@@ -463,15 +417,6 @@ class ChatSessionResponse(BaseModel):
         use_enum_values=True
     )
 
-    @field_serializer('created_at', 'last_activity')
-    def serialize_datetime(self, value: datetime) -> str:
-        """Serialize datetime to ISO format"""
-        return value.isoformat()
-    
-    @field_serializer('id', 'repository_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
 
 
 class ChatSessionList(BaseModel):
@@ -488,7 +433,7 @@ class ChatSessionList(BaseModel):
         return [session.model_dump() for session in value]
 
 
-class ConversationHistory(BaseModel):
+class ConversationHistory(BaseSerializers):
     """Conversation history response model"""
 
     session_id: UUID = Field(description="Session ID")
@@ -500,7 +445,3 @@ class ConversationHistory(BaseModel):
 
     model_config = ConfigDict()
 
-    @field_serializer('session_id')
-    def serialize_uuid(self, value: UUID) -> str:
-        """Serialize UUID to string"""
-        return str(value)
