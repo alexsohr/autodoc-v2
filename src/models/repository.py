@@ -93,7 +93,7 @@ class Repository(BaseModel):
         use_enum_values=True
     )
 
-    @field_serializer('created_at', 'updated_at')
+    @field_serializer('created_at', 'updated_at', 'last_analyzed', 'last_webhook_event')
     def serialize_datetime(self, value: datetime) -> str:
         """Serialize datetime to ISO format"""
         return value.isoformat()

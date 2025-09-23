@@ -171,7 +171,7 @@ class Answer(BaseModel):
         """Serialize datetime to ISO format"""
         return value.isoformat()
     
-    @field_serializer('id')
+    @field_serializer('id', 'question_id')
     def serialize_uuid(self, value: UUID) -> str:
         """Serialize UUID to string"""
         return str(value)
@@ -259,7 +259,7 @@ class Question(BaseModel):
         """Serialize datetime to ISO format"""
         return value.isoformat()
     
-    @field_serializer('id')
+    @field_serializer('id', 'session_id')
     def serialize_uuid(self, value: UUID) -> str:
         """Serialize UUID to string"""
         return str(value)
@@ -327,7 +327,7 @@ class ChatSession(BaseModel):
         """Serialize datetime to ISO format"""
         return value.isoformat()
     
-    @field_serializer('id')
+    @field_serializer('id', 'repository_id')
     def serialize_uuid(self, value: UUID) -> str:
         """Serialize UUID to string"""
         return str(value)

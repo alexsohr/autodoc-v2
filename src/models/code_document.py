@@ -49,12 +49,12 @@ class CodeDocument(BaseModel):
         validate_assignment=True
     )
 
-    @field_serializer('updated_at')
+    @field_serializer('created_at', 'updated_at')
     def serialize_datetime(self, value: datetime) -> str:
         """Serialize datetime to ISO format"""
         return value.isoformat()
     
-    @field_serializer('id')
+    @field_serializer('repository_id')
     def serialize_uuid(self, value: UUID) -> str:
         """Serialize UUID to string"""
         return str(value)
