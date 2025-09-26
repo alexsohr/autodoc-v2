@@ -2,13 +2,13 @@
 description: Generate an actionable, dependency-ordered tasks.md for the feature based on available design artifacts.
 ---
 
-The user input to you can be provided directly by the agent or in `$ARGUMENTS` - you **MUST** consider it before proceeding with the prompt (if not empty).
+The user input to you can be provided directly by the agent or as a command argument - you **MUST** consider it before proceeding with the prompt (if not empty).
 
 User input:
 
 $ARGUMENTS
 
-1. Run `.specify/scripts/bash/check-prerequisites.sh --json` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute.
+1. Run `.specify/scripts/powershell/check-prerequisites.ps1 -Json` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute.
 2. Load and analyze available design documents:
    - Always read plan.md for tech stack and libraries
    - IF EXISTS: Read data-model.md for entities
