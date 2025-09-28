@@ -23,8 +23,8 @@ from src.api.middleware.error_handler import (
 )
 from src.api.middleware.logging import request_logging_middleware
 from src.api.routes import chat, health, repositories, webhooks, wiki
+from src.repository.database import close_mongodb, init_mongodb
 from src.utils.config_loader import get_settings
-from src.utils.database import close_database, init_database
 
 
 @asynccontextmanager
@@ -33,8 +33,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     print("AutoDoc v2 starting up...")
     try:
-        # Initialize database connections
-        await init_database()
+        # Configure LangSmith tracing
+        settings = get_settings()
+        settings.configure_langsmith()
+        if settings.is_langsmith_enabled:
+            print(f"LangSmith tracing enabled for project: {settings.langsmith_project}")
+        else:
+            print("LangSmith tracing disabled (no API key provided)")
+        
+        # Initialize data access layer (MongoDB/Beanie)
+        await init_mongodb()
         print("Database initialized successfully")
         # TODO: Initialize storage adapters
         # TODO: Load LLM configurations
@@ -48,7 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     print("AutoDoc v2 shutting down...")
     try:
         # Close database connections
-        await close_database()
+        await close_mongodb()
         print("Database connections closed")
         # TODO: Cleanup resources
     except Exception as e:
@@ -183,7 +191,7 @@ generates comprehensive documentation, and provides intelligent chat-based queri
         """Generate custom OpenAPI schema with security schemes"""
         if app.openapi_schema:
             return app.openapi_schema
-        
+
         openapi_schema = get_openapi(
             title=app.title,
             version=app.version,
@@ -194,55 +202,43 @@ generates comprehensive documentation, and provides intelligent chat-based queri
             license_info=app.license_info,
             openapi_version="3.1.0",
         )
-        
+
         # Add security schemes (ensure components section exists)
         if "components" not in openapi_schema:
             openapi_schema["components"] = {}
-        
+
         openapi_schema["components"]["securitySchemes"] = {
             "BearerAuth": {
                 "type": "http",
                 "scheme": "bearer",
                 "bearerFormat": "JWT",
-                "description": "JWT Bearer token authentication. Obtain token via login endpoint."
+                "description": "JWT Bearer token authentication. Obtain token via login endpoint.",
             },
             "ApiKeyAuth": {
                 "type": "apiKey",
                 "in": "header",
                 "name": "X-API-Key",
-                "description": "API key authentication for service-to-service communication."
-            }
+                "description": "API key authentication for service-to-service communication.",
+            },
         }
-        
+
         # Add global security requirement (can be overridden per endpoint)
-        openapi_schema["security"] = [
-            {"BearerAuth": []},
-            {"ApiKeyAuth": []}
-        ]
-        
+        openapi_schema["security"] = [{"BearerAuth": []}, {"ApiKeyAuth": []}]
+
         # Add servers information
         openapi_schema["servers"] = [
-            {
-                "url": "/",
-                "description": "Current server"
-            },
-            {
-                "url": "http://localhost:8000",
-                "description": "Local development server"
-            },
-            {
-                "url": "https://api.autodoc.dev",
-                "description": "Production server"
-            }
+            {"url": "/", "description": "Current server"},
+            {"url": "http://localhost:8000", "description": "Local development server"},
+            {"url": "https://api.autodoc.dev", "description": "Production server"},
         ]
-        
+
         # Add additional metadata
         openapi_schema["info"]["termsOfService"] = "https://autodoc.dev/terms"
         openapi_schema["info"]["x-logo"] = {
             "url": "https://autodoc.dev/logo.png",
-            "altText": "AutoDoc v2 Logo"
+            "altText": "AutoDoc v2 Logo",
         }
-        
+
         app.openapi_schema = openapi_schema
         return app.openapi_schema
 

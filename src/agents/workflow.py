@@ -18,11 +18,11 @@ from langgraph.graph import END, StateGraph
 from ..agents.document_agent import DocumentProcessingAgent, document_agent
 from ..agents.wiki_agent import WikiGenerationAgent, wiki_agent
 from ..models.repository import AnalysisStatus, Repository
+from ..repository.database import get_database
 from ..tools.context_tool import context_tool
 from ..tools.embedding_tool import embedding_tool
 from ..tools.llm_tool import llm_tool
 from ..tools.repository_tool import repository_tool
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,9 @@ class WorkflowOrchestrator:
         workflow.add_edge("handle_error", END)
 
         app = workflow.compile(checkpointer=self.memory)
-        logger.debug(f"Document processing workflow:\n {app.get_graph().draw_mermaid()}")
+        logger.debug(
+            f"Document processing workflow:\n {app.get_graph().draw_mermaid()}"
+        )
         return app
 
     def _create_wiki_generation_workflow(self) -> StateGraph:
@@ -317,9 +319,10 @@ class WorkflowOrchestrator:
             state["progress"] = 5.0
 
             # Get repository from database
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.find_document(
-                "repositories", {"id": state["repository_id"]}
+            # Use database directly for generic operations
+            database = await get_database()
+            repository = await database["repositories"].find_one(
+                {"id": state["repository_id"]}
             )
 
             if not repository:
@@ -356,9 +359,10 @@ class WorkflowOrchestrator:
 
             # Check if documents already processed (unless force update)
             if not state["force_update"]:
-                mongodb = await get_mongodb_adapter()
-                doc_count = await mongodb.count_documents(
-                    "code_documents", {"repository_id": state["repository_id"]}
+                # Use database directly for generic operations
+                database = await get_database()
+                doc_count = await database["code_documents"].count_documents(
+                    {"repository_id": state["repository_id"]}
                 )
 
                 if doc_count > 0:
@@ -412,9 +416,10 @@ class WorkflowOrchestrator:
 
             # Check if wiki already exists (unless force update)
             if not state["force_update"]:
-                mongodb = await get_mongodb_adapter()
-                existing_wiki = await mongodb.find_document(
-                    "wiki_structures", {"repository_id": state["repository_id"]}
+                # Use database directly for generic operations
+                database = await get_database()
+                existing_wiki = await database["wiki_structures"].find_one(
+                    {"repository_id": state["repository_id"]}
                 )
 
                 if existing_wiki:
@@ -678,7 +683,8 @@ class WorkflowOrchestrator:
             error_message: Optional error message
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             updates = {
                 "analysis_status": status.value,
@@ -691,9 +697,7 @@ class WorkflowOrchestrator:
             if error_message:
                 updates["error_message"] = error_message
 
-            await mongodb.update_document(
-                "repositories", {"id": repository_id}, updates
-            )
+            await database["repositories"].update_one({"id": repository_id}, {"$set": updates})
 
         except Exception as e:
             logger.error(f"Failed to update repository status: {e}")
@@ -719,10 +723,9 @@ class WorkflowOrchestrator:
             # This would retrieve state from checkpointer if workflow is running
             # For now, return basic status
 
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.find_document(
-                "repositories", {"id": repository_id}
-            )
+            # Use database directly for generic operations
+            database = await get_database()
+            repository = await database["repositories"].find_one({"id": repository_id})
 
             if not repository:
                 return {
@@ -732,11 +735,11 @@ class WorkflowOrchestrator:
 
             # Determine status based on workflow type
             if workflow_type == WorkflowType.FULL_ANALYSIS:
-                doc_count = await mongodb.count_documents(
-                    "code_documents", {"repository_id": repository_id}
+                doc_count = await database["code_documents"].count_documents(
+                    {"repository_id": repository_id}
                 )
-                wiki_exists = await mongodb.find_document(
-                    "wiki_structures", {"repository_id": repository_id}
+                wiki_exists = await database["wiki_structures"].find_one(
+                    {"repository_id": repository_id}
                 )
 
                 if doc_count > 0 and wiki_exists:
@@ -747,14 +750,14 @@ class WorkflowOrchestrator:
                     status = "not_started"
 
             elif workflow_type == WorkflowType.DOCUMENT_PROCESSING:
-                doc_count = await mongodb.count_documents(
-                    "code_documents", {"repository_id": repository_id}
+                doc_count = await database["code_documents"].count_documents(
+                    {"repository_id": repository_id}
                 )
                 status = "completed" if doc_count > 0 else "not_started"
 
             elif workflow_type == WorkflowType.WIKI_GENERATION:
-                wiki_exists = await mongodb.find_document(
-                    "wiki_structures", {"repository_id": repository_id}
+                wiki_exists = await database["wiki_structures"].find_one(
+                    {"repository_id": repository_id}
                 )
                 status = "completed" if wiki_exists else "not_started"
 

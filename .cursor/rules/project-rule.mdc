@@ -1,0 +1,19 @@
+---
+alwaysApply: true
+---
+
+# Tool use
+- **Context7 MCP**: Use this tool when you need to read the latest documentation of dependencies. 
+- **Serena MCP**: Use this tool for any interaction with the codebase, including but not limited to pattern search, and code rewrite helpers for navigation, refactors, and cross-reference mapping; respect existing modifications and validate before writing.
+- **Knowledge Memory**: Use `serena` before creating task lists to refer to stored context in the memory for better analysis. After completing final stage of tasks, update findings with in the memory and prune stale notes when they no longer apply.
+- **Terminal Expectations**: PowerShell is the default shell.
+
+## Environment Setup
+- Always activate the Python virtual environment at the start of each session: `venv\Scripts\activate` (Windows) .
+- Verify the correct Python interpreter is active with `python --version` and `which python` before running any `python -m ...` commands.
+
+## Execution Restrictions
+- **Server Startup**: Should always ask the user to start or restart the server using `python.exe -m src.api.main` and other server startup commands directly through terminal rather than using Serena MCP servers or running them directly.
+- **Output Requirements**: When executing commands, the user should capture and display the complete output for proper debugging and verification. Always request the user to provide the full output for troubleshooting purposes.
+
+

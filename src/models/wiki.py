@@ -9,7 +9,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pymongo import ASCENDING, TEXT, IndexModel
+
+from .base import BaseDocument
 
 
 class PageImportance(str, Enum):
@@ -44,10 +47,7 @@ class WikiPageDetail(BaseModel):
     # Content
     content: str = Field(default="", description="Generated markdown content")
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        use_enum_values=True
-    )
+    model_config = ConfigDict(validate_assignment=True, use_enum_values=True)
 
     @field_validator("id")
     @classmethod
@@ -173,9 +173,7 @@ class WikiSection(BaseModel):
     )
     subsections: List[str] = Field(default_factory=list, description="Subsection IDs")
 
-    model_config = ConfigDict(
-        validate_assignment=True
-    )
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("id")
     @classmethod
@@ -279,7 +277,7 @@ class WikiSection(BaseModel):
         return f"WikiSection(id={self.id}, title={self.title})"
 
 
-class WikiStructure(BaseModel):
+class WikiStructure(BaseDocument):
     """Complete wiki structure for a repository
 
     Represents the complete wiki structure including all pages,
@@ -288,6 +286,7 @@ class WikiStructure(BaseModel):
 
     # Core identification
     id: str = Field(description="Unique wiki identifier")
+    repository_id: UUID = Field(description="Repository identifier")
     title: str = Field(description="Wiki title")
     description: str = Field(description="Wiki description")
 
@@ -302,9 +301,14 @@ class WikiStructure(BaseModel):
         default_factory=list, description="Top-level section IDs"
     )
 
-    model_config = ConfigDict(
-        validate_assignment=True
-    )
+    class Settings:
+        name = "wiki_structures"
+        indexes = [
+            IndexModel("repository_id", unique=True),
+            IndexModel([("title", TEXT), ("description", TEXT)]),
+        ]
+
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("id")
     @classmethod

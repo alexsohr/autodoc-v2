@@ -265,7 +265,7 @@ class TestContextRetrievalPerformance:
         context_tool = ContextTool()
 
         # Mock large document set for search
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter") as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 

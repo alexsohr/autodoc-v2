@@ -4,67 +4,19 @@ This module provides authentication and authorization services
 including JWT token management, user validation, and security utilities.
 """
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union
-from uuid import UUID, uuid4
+from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from pydantic import BaseModel, Field
 
+from ..models.user import Token, TokenData, User, UserCreate, UserLogin, UserUpdate
+from ..repository.user_repository import UserRepository
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
-
-
-class User(BaseModel):
-    """User model for authentication"""
-
-    id: UUID = Field(default_factory=uuid4, description="User ID")
-    username: str = Field(description="Username")
-    email: str = Field(description="Email address")
-    full_name: Optional[str] = Field(default=None, description="Full name")
-    is_active: bool = Field(default=True, description="User is active")
-    is_admin: bool = Field(default=False, description="User has admin privileges")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    last_login: Optional[datetime] = Field(
-        default=None, description="Last login timestamp"
-    )
-
-
-class UserCreate(BaseModel):
-    """User creation model"""
-
-    username: str = Field(description="Username")
-    email: str = Field(description="Email address")
-    password: str = Field(description="Password")
-    full_name: Optional[str] = Field(default=None, description="Full name")
-
-
-class UserLogin(BaseModel):
-    """User login model"""
-
-    username: str = Field(description="Username or email")
-    password: str = Field(description="Password")
-
-
-class Token(BaseModel):
-    """JWT token model"""
-
-    access_token: str = Field(description="JWT access token")
-    token_type: str = Field(default="bearer", description="Token type")
-    expires_in: int = Field(description="Token expiration time in seconds")
-
-
-class TokenData(BaseModel):
-    """Token payload data"""
-
-    username: Optional[str] = Field(default=None, description="Username")
-    user_id: Optional[str] = Field(default=None, description="User ID")
-    scopes: List[str] = Field(default_factory=list, description="Token scopes")
 
 
 class AuthenticationService:
@@ -77,6 +29,7 @@ class AuthenticationService:
     def __init__(self):
         """Initialize authentication service"""
         self.settings = get_settings()
+        self.user_repository = UserRepository()
 
         # Password hashing context
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -97,8 +50,7 @@ class AuthenticationService:
         """
         try:
             # Check if user already exists
-            existing_user = await self.get_user_by_username(user_data.username)
-            if existing_user:
+            if await self.user_repository.username_exists(user_data.username):
                 return {
                     "status": "error",
                     "error": "Username already exists",
@@ -106,8 +58,7 @@ class AuthenticationService:
                 }
 
             # Check if email already exists
-            existing_email = await self.get_user_by_email(user_data.email)
-            if existing_email:
+            if await self.user_repository.email_exists(user_data.email):
                 return {
                     "status": "error",
                     "error": "Email already exists",
@@ -118,25 +69,18 @@ class AuthenticationService:
             hashed_password = self.get_password_hash(user_data.password)
 
             # Create user
-            user = User(
+            user_doc = await self.user_repository.create_user(
                 username=user_data.username,
                 email=user_data.email,
+                hashed_password=hashed_password,
                 full_name=user_data.full_name,
             )
 
-            # Store user in database
-            mongodb = await get_mongodb_adapter()
-            user_dict = user.model_dump()
-            user_dict["id"] = str(user.id)
-            user_dict["hashed_password"] = hashed_password
-
-            await mongodb.insert_document("users", user_dict)
-
             return {
                 "status": "success",
-                "user_id": str(user.id),
-                "username": user.username,
-                "email": user.email,
+                "user_id": str(user_doc.id),
+                "username": user_doc.username,
+                "email": user_doc.email,
             }
 
         except Exception as e:
@@ -155,63 +99,56 @@ class AuthenticationService:
         """
         try:
             # Get user by username or email
-            user_data = await self.get_user_by_username(username)
-            if not user_data:
-                user_data = await self.get_user_by_email(username)
-
-            if not user_data:
+            user_doc = await self.user_repository.get_by_username_or_email(username)
+            if not user_doc:
                 return None
 
             # Verify password
-            hashed_password = user_data.get("hashed_password", "")
-            if not self.verify_password(password, hashed_password):
+            if not self.verify_password(password, user_doc.hashed_password):
                 return None
 
             # Check if user is active
-            if not user_data.get("is_active", True):
+            if not user_doc.is_active:
                 return None
 
             # Update last login
-            await self.update_last_login(user_data["id"])
+            await self.user_repository.update_last_login(user_doc.id)
 
-            # Convert to User model
-            user_data["id"] = UUID(user_data["id"])
-            user_data.pop("hashed_password", None)  # Remove password from response
-
-            return User(**user_data)
+            # Convert to User model (without sensitive data)
+            return self.user_repository.to_user_model(user_doc)
 
         except Exception as e:
             logger.error(f"User authentication failed: {e}")
             return None
 
-    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_username(self, username: str) -> Optional[User]:
         """Get user by username
 
         Args:
             username: Username
 
         Returns:
-            User data dictionary or None
+            User model or None
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            return await mongodb.find_document("users", {"username": username})
+            user_doc = await self.user_repository.get_by_username(username)
+            return self.user_repository.to_user_model(user_doc) if user_doc else None
         except Exception as e:
             logger.error(f"Failed to get user by username: {e}")
             return None
 
-    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_email(self, email: str) -> Optional[User]:
         """Get user by email
 
         Args:
             email: Email address
 
         Returns:
-            User data dictionary or None
+            User model or None
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            return await mongodb.find_document("users", {"email": email})
+            user_doc = await self.user_repository.get_by_email(email)
+            return self.user_repository.to_user_model(user_doc) if user_doc else None
         except Exception as e:
             logger.error(f"Failed to get user by email: {e}")
             return None
@@ -226,33 +163,11 @@ class AuthenticationService:
             User object or None
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            user_data = await mongodb.find_document("users", {"id": str(user_id)})
-
-            if user_data:
-                user_data["id"] = UUID(user_data["id"])
-                user_data.pop("hashed_password", None)  # Remove password
-                return User(**user_data)
-
-            return None
-
+            user_doc = await self.user_repository.get_by_id(user_id)
+            return self.user_repository.to_user_model(user_doc) if user_doc else None
         except Exception as e:
             logger.error(f"Failed to get user by ID: {e}")
             return None
-
-    async def update_last_login(self, user_id: str) -> None:
-        """Update user's last login timestamp
-
-        Args:
-            user_id: User ID
-        """
-        try:
-            mongodb = await get_mongodb_adapter()
-            await mongodb.update_document(
-                "users", {"id": user_id}, {"last_login": datetime.now(timezone.utc)}
-            )
-        except Exception as e:
-            logger.error(f"Failed to update last login: {e}")
 
     def get_password_hash(self, password: str) -> str:
         """Hash password using bcrypt
@@ -409,13 +324,7 @@ class AuthenticationService:
             if token_data.user_id:
                 user = await self.get_user_by_id(UUID(token_data.user_id))
             elif token_data.username:
-                user_data = await self.get_user_by_username(token_data.username)
-                if user_data:
-                    user_data["id"] = UUID(user_data["id"])
-                    user_data.pop("hashed_password", None)
-                    user = User(**user_data)
-                else:
-                    user = None
+                user = await self.get_user_by_username(token_data.username)
             else:
                 return None
 
@@ -443,8 +352,7 @@ class AuthenticationService:
             # Check specific scopes (simplified for now)
             user_scopes = ["read"]  # Default scope for regular users
             if user.is_admin:
-                user_scopes.append("write")
-                user_scopes.append("admin")
+                user_scopes.extend(["write", "admin"])
 
             return all(scope in user_scopes for scope in required_scopes)
 
@@ -545,11 +453,9 @@ class AuthenticationService:
             Dictionary with change result
         """
         try:
-            # Get user
-            mongodb = await get_mongodb_adapter()
-            user_data = await mongodb.find_document("users", {"id": str(user_id)})
-
-            if not user_data:
+            # Get user document (with password)
+            user_doc = await self.user_repository.get_by_id(user_id)
+            if not user_doc:
                 return {
                     "status": "error",
                     "error": "User not found",
@@ -557,8 +463,7 @@ class AuthenticationService:
                 }
 
             # Verify current password
-            hashed_password = user_data.get("hashed_password", "")
-            if not self.verify_password(current_password, hashed_password):
+            if not self.verify_password(current_password, user_doc.hashed_password):
                 return {
                     "status": "error",
                     "error": "Current password is incorrect",
@@ -569,18 +474,25 @@ class AuthenticationService:
             new_hashed_password = self.get_password_hash(new_password)
 
             # Update password
-            await mongodb.update_document(
-                "users", {"id": str(user_id)}, {"hashed_password": new_hashed_password}
+            success = await self.user_repository.update_password(
+                user_id, new_hashed_password
             )
 
-            return {"status": "success", "message": "Password changed successfully"}
+            if success:
+                return {"status": "success", "message": "Password changed successfully"}
+            else:
+                return {
+                    "status": "error",
+                    "error": "Failed to update password",
+                    "error_type": "UpdateFailed",
+                }
 
         except Exception as e:
             logger.error(f"Password change failed: {e}")
             return {"status": "error", "error": str(e), "error_type": type(e).__name__}
 
     async def update_user_profile(
-        self, user_id: UUID, updates: Dict[str, Any]
+        self, user_id: UUID, updates: UserUpdate
     ) -> Dict[str, Any]:
         """Update user profile
 
@@ -592,18 +504,10 @@ class AuthenticationService:
             Dictionary with update result
         """
         try:
-            # Remove sensitive fields from updates
-            allowed_updates = {
-                "full_name": updates.get("full_name"),
-                "email": updates.get("email"),
-            }
+            # Convert to dict and remove None values
+            update_dict = updates.model_dump(exclude_none=True)
 
-            # Remove None values
-            allowed_updates = {
-                k: v for k, v in allowed_updates.items() if v is not None
-            }
-
-            if not allowed_updates:
+            if not update_dict:
                 return {
                     "status": "error",
                     "error": "No valid updates provided",
@@ -611,20 +515,21 @@ class AuthenticationService:
                 }
 
             # Check if email already exists (if updating email)
-            if "email" in allowed_updates:
-                existing_email = await self.get_user_by_email(allowed_updates["email"])
-                if existing_email and existing_email["id"] != str(user_id):
-                    return {
-                        "status": "error",
-                        "error": "Email already exists",
-                        "error_type": "DuplicateEmail",
-                    }
+            if "email" in update_dict:
+                if await self.user_repository.email_exists(update_dict["email"]):
+                    # Check if it's not the same user
+                    existing_user = await self.user_repository.get_by_email(
+                        update_dict["email"]
+                    )
+                    if existing_user and existing_user.id != user_id:
+                        return {
+                            "status": "error",
+                            "error": "Email already exists",
+                            "error_type": "DuplicateEmail",
+                        }
 
             # Update user
-            mongodb = await get_mongodb_adapter()
-            success = await mongodb.update_document(
-                "users", {"id": str(user_id)}, allowed_updates
-            )
+            success = await self.user_repository.update_profile(user_id, update_dict)
 
             if success:
                 return {"status": "success", "message": "Profile updated successfully"}
@@ -653,31 +558,20 @@ class AuthenticationService:
             Dictionary with user list
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
-            # Build query
-            query = {}
-            if admin_only:
-                query["is_admin"] = True
-
             # Get users
-            users_data = await mongodb.find_documents(
-                "users", query, limit=limit, offset=offset, sort_field="created_at"
+            user_docs = await self.user_repository.list_users(
+                limit=limit, offset=offset, admin_only=admin_only
             )
 
-            # Convert to User objects and remove passwords
-            users = []
-            for user_data in users_data:
-                user_data["id"] = UUID(user_data["id"])
-                user_data.pop("hashed_password", None)
-                users.append(User(**user_data).model_dump())
+            # Convert to User models
+            users = self.user_repository.to_user_models(user_docs)
 
             # Get total count
-            total_count = await mongodb.count_documents("users", query)
+            total_count = await self.user_repository.count_users(admin_only=admin_only)
 
             return {
                 "status": "success",
-                "users": users,
+                "users": [user.model_dump() for user in users],
                 "total": total_count,
                 "limit": limit,
                 "offset": offset,
@@ -702,11 +596,9 @@ class AuthenticationService:
             Dictionary with deletion result
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
             # Check if user exists
-            user_data = await mongodb.find_document("users", {"id": str(user_id)})
-            if not user_data:
+            user_doc = await self.user_repository.get_by_id(user_id)
+            if not user_doc:
                 return {
                     "status": "error",
                     "error": "User not found",
@@ -714,7 +606,7 @@ class AuthenticationService:
                 }
 
             # Delete user
-            success = await mongodb.delete_document("users", {"id": str(user_id)})
+            success = await self.user_repository.delete_user(user_id)
 
             if success:
                 return {"status": "success", "message": "User deleted successfully"}
@@ -736,10 +628,6 @@ class AuthenticationService:
             Dictionary with health check results
         """
         try:
-            # Test database connection
-            mongodb = await get_mongodb_adapter()
-            health_result = await mongodb.health_check()
-
             # Test password hashing
             test_hash = self.get_password_hash("test")
             hash_verify = self.verify_password("test", test_hash)
@@ -748,11 +636,15 @@ class AuthenticationService:
             test_token = self.create_access_token({"sub": "test", "user_id": "test"})
             token_verify = self.verify_token(test_token)
 
+            # Test repository connection (basic count)
+            user_count = await self.user_repository.count_users(active_only=False)
+
             return {
                 "status": "healthy",
-                "database_status": health_result.get("status", "unknown"),
                 "password_hashing": "working" if hash_verify else "failed",
                 "jwt_operations": "working" if token_verify else "failed",
+                "repository_connection": "working",
+                "user_count": user_count,
                 "token_expire_minutes": self.access_token_expire_minutes,
             }
 

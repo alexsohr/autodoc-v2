@@ -18,10 +18,10 @@ from ..models.code_document import (
     CodeDocumentCreate,
     CodeDocumentResponse,
 )
+from ..repository.database import get_database
 from ..tools.context_tool import context_tool
 from ..tools.embedding_tool import embedding_tool
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +33,23 @@ class DocumentProcessingService:
     content cleaning, embedding generation, and semantic search.
     """
 
-    def __init__(self):
-        """Initialize document processing service"""
+    def __init__(self, code_document_repo=None):
+        """Initialize document processing service with repository dependency injection"""
         self.settings = get_settings()
         self.max_file_size = self.settings.max_file_size_mb * 1024 * 1024
         self.supported_languages = set(self.settings.supported_languages)
         self.batch_size = self.settings.embedding_batch_size
+        # Repository will be injected or lazily loaded
+        self._code_document_repo = code_document_repo
+
+    async def _get_code_document_repo(self):
+        """Get code document repository instance (lazy loading)"""
+        if self._code_document_repo is None:
+            from ..repository.code_document_repository import CodeDocumentRepository
+            from ..models.code_document import CodeDocument
+            
+            self._code_document_repo = CodeDocumentRepository(CodeDocument)
+        return self._code_document_repo
 
     async def process_repository_documents(
         self,
@@ -61,9 +72,9 @@ class DocumentProcessingService:
         try:
             # Check if already processed
             if not force_reprocess:
-                mongodb = await get_mongodb_adapter()
-                existing_docs = await mongodb.count_documents(
-                    "code_documents", {"repository_id": str(repository_id)}
+                code_document_repo = await self._get_code_document_repo()
+                existing_docs = await code_document_repo.count(
+                    {"repository_id": str(repository_id)}
                 )
 
                 if existing_docs > 0:
@@ -123,7 +134,7 @@ class DocumentProcessingService:
             Dictionary with document list and metadata
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            code_document_repo = await self._get_code_document_repo()
 
             # Build query filter
             query_filter = {"repository_id": str(repository_id)}
@@ -131,13 +142,13 @@ class DocumentProcessingService:
                 query_filter["language"] = language_filter
 
             # Get documents
-            documents_data = await mongodb.find_documents(
-                "code_documents",
+            documents_data = await code_document_repo.find_many(
                 query_filter,
                 limit=limit,
                 offset=offset,
-                sort_field="file_path",
+                sort=[("file_path", 1)],
             )
+            documents_data = code_document_repo.serialize_many(documents_data)
 
             # Apply path pattern filter if specified
             if path_pattern:
@@ -162,7 +173,7 @@ class DocumentProcessingService:
             )
 
             # Get total count
-            total_count = await mongodb.count_documents("code_documents", query_filter)
+            total_count = await code_document_repo.count(query_filter)
 
             return {
                 "status": "success",
@@ -259,10 +270,9 @@ class DocumentProcessingService:
             Dictionary with document content
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            doc_data = await mongodb.find_document(
-                "code_documents", {"id": document_id}
-            )
+            code_document_repo = await self._get_code_document_repo()
+            doc = await code_document_repo.find_one({"id": document_id})
+            doc_data = code_document_repo.serialize(doc) if doc else None
 
             if not doc_data:
                 return {
@@ -308,12 +318,11 @@ class DocumentProcessingService:
             Dictionary with update result
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            code_document_repo = await self._get_code_document_repo()
 
             # Get existing document
-            doc_data = await mongodb.find_document(
-                "code_documents", {"id": document_id}
-            )
+            doc = await code_document_repo.find_one({"id": document_id})
+            doc_data = code_document_repo.serialize(doc) if doc else None
             if not doc_data:
                 return {
                     "status": "error",
@@ -337,8 +346,8 @@ class DocumentProcessingService:
             if regenerate_embedding:
                 updates["embedding"] = None
 
-            success = await mongodb.update_document(
-                "code_documents", {"id": document_id}, updates
+            success = await code_document_repo.update_one(
+                {"id": document_id}, updates
             )
 
             if not success:
@@ -386,12 +395,11 @@ class DocumentProcessingService:
             Dictionary with deletion result
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            code_document_repo = await self._get_code_document_repo()
 
             # Check if document exists
-            doc_data = await mongodb.find_document(
-                "code_documents", {"id": document_id}
-            )
+            doc = await code_document_repo.find_one({"id": document_id})
+            doc_data = code_document_repo.serialize(doc) if doc else None
             if not doc_data:
                 return {
                     "status": "error",
@@ -400,9 +408,7 @@ class DocumentProcessingService:
                 }
 
             # Delete document
-            success = await mongodb.delete_document(
-                "code_documents", {"id": document_id}
-            )
+            success = await code_document_repo.delete_one({"id": document_id})
 
             if success:
                 return {
@@ -500,12 +506,13 @@ class DocumentProcessingService:
             Dictionary with quality analysis
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            code_document_repo = await self._get_code_document_repo()
 
             # Get all documents for repository
-            documents_data = await mongodb.find_documents(
-                "code_documents", {"repository_id": str(repository_id)}, limit=1000
+            documents = await code_document_repo.find_many(
+                {"repository_id": str(repository_id)}, limit=1000
             )
+            documents_data = code_document_repo.serialize_many(documents)
 
             if not documents_data:
                 return {
@@ -599,7 +606,7 @@ class DocumentProcessingService:
             Dictionary with processing results
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            code_document_repo = await self._get_code_document_repo()
 
             processed_files = 0
             added_files = 0
@@ -665,7 +672,8 @@ class DocumentProcessingService:
             Dictionary mapping language to count
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            # Get database for aggregation
+            database = await get_database()
 
             # Aggregate by language
             pipeline = [
@@ -675,7 +683,10 @@ class DocumentProcessingService:
             ]
 
             language_stats = {}
-            collection = mongodb.get_collection("code_documents")
+            from ..repository.database import get_database
+
+            # Database already available from get_database import
+            collection = database["code_documents"]
             async for doc in collection.aggregate(pipeline):
                 language_stats[doc["_id"]] = doc["count"]
 
@@ -875,10 +886,9 @@ class DocumentProcessingService:
             file_path: Path of removed file
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            await mongodb.delete_document(
-                "code_documents",
-                {"repository_id": str(repository_id), "file_path": file_path},
+            code_document_repo = await self._get_code_document_repo()
+            await code_document_repo.delete_one(
+                {"repository_id": str(repository_id), "file_path": file_path}
             )
         except Exception as e:
             logger.warning(f"Failed to remove file {file_path}: {e}")

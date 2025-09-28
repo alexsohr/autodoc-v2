@@ -38,7 +38,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                     "full_name": "myorg/myrepo",
                                     "html_url": "https://github.com/myorg/myrepo",
                                     "clone_url": "https://github.com/myorg/myrepo.git",
-                                    "default_branch": "main"
+                                    "default_branch": "main",
                                 },
                                 "commits": [
                                     {
@@ -46,11 +46,11 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                         "message": "Update README.md",
                                         "author": {
                                             "name": "John Doe",
-                                            "email": "john@example.com"
-                                        }
+                                            "email": "john@example.com",
+                                        },
                                     }
-                                ]
-                            }
+                                ],
+                            },
                         },
                         "pull_request_event": {
                             "summary": "Pull Request Event",
@@ -61,14 +61,14 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                     "id": 123456,
                                     "number": 42,
                                     "title": "Add new feature",
-                                    "state": "open"
+                                    "state": "open",
                                 },
                                 "repository": {
                                     "full_name": "myorg/myrepo",
-                                    "html_url": "https://github.com/myorg/myrepo"
-                                }
-                            }
-                        }
+                                    "html_url": "https://github.com/myorg/myrepo",
+                                },
+                            },
+                        },
                     }
                 }
             }
@@ -86,8 +86,8 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                     "message": "Repository analysis triggered",
                                     "repository_id": "550e8400-e29b-41d4-a716-446655440000",
                                     "event_type": "push",
-                                    "processing_time": 0.5
-                                }
+                                    "processing_time": 0.5,
+                                },
                             },
                             "ignored": {
                                 "summary": "Event Ignored",
@@ -96,21 +96,33 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                     "message": "Event type not subscribed",
                                     "repository_id": "550e8400-e29b-41d4-a716-446655440000",
                                     "event_type": "issues",
-                                    "processing_time": 0.1
-                                }
-                            }
+                                    "processing_time": 0.1,
+                                },
+                            },
                         }
                     }
-                }
+                },
             }
-        }
-    }
+        },
+    },
 )
 async def github_webhook(
     request: Request,
-    x_github_event: str = Header(..., alias="X-GitHub-Event", description="GitHub event type (e.g., push, pull_request)"),
-    x_hub_signature_256: str = Header(..., alias="X-Hub-Signature-256", description="GitHub webhook signature for validation"),
-    x_github_delivery: str = Header(..., alias="X-GitHub-Delivery", description="Unique delivery ID for this webhook"),
+    x_github_event: str = Header(
+        ...,
+        alias="X-GitHub-Event",
+        description="GitHub event type (e.g., push, pull_request)",
+    ),
+    x_hub_signature_256: str = Header(
+        ...,
+        alias="X-Hub-Signature-256",
+        description="GitHub webhook signature for validation",
+    ),
+    x_github_delivery: str = Header(
+        ...,
+        alias="X-GitHub-Delivery",
+        description="Unique delivery ID for this webhook",
+    ),
 ):
     """GitHub webhook endpoint"""
     try:

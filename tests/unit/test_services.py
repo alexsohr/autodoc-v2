@@ -9,9 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
-from src.models.chat import QuestionRequest, SessionStatus
-from src.models.repository import AnalysisStatus, Repository, RepositoryProvider
+from src.models.chat import ChatSession, QuestionRequest, SessionStatus
+from src.models.repository import AnalysisStatus, Repository, RepositoryCreate, RepositoryProvider
 from src.services.auth_service import AuthenticationService, User, UserCreate, UserLogin
 from src.services.chat_service import ChatService
 from src.services.document_service import DocumentProcessingService
@@ -66,7 +67,7 @@ class TestAuthenticationService:
         )
 
         # Mock database operations
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -94,7 +95,7 @@ class TestAuthenticationService:
             "is_admin": False,
         }
 
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -131,7 +132,7 @@ class TestRepositoryService:
             provider=RepositoryProvider.GITHUB,
         )
 
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -272,7 +273,7 @@ class TestWikiService:
         """Test wiki generation validation"""
         repository_id = uuid4()
 
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -327,7 +328,7 @@ class TestChatService:
         """Test chat session creation validation"""
         repository_id = uuid4()
 
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -357,12 +358,8 @@ class TestChatService:
         session_id = uuid4()
 
         # Empty question should fail
-        empty_question = QuestionRequest(content="")
-
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter"):
-            # This would be tested in the API layer, but we can test the model validation
-            with pytest.raises(ValueError):
-                QuestionRequest(content="")
+        with pytest.raises(ValidationError):
+            QuestionRequest(content="")
 
 
 class TestServiceIntegration:
@@ -406,7 +403,7 @@ class TestServiceIntegration:
     async def test_error_propagation(self):
         """Test error propagation between services"""
         # Test that errors are properly propagated and handled
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -447,7 +444,7 @@ class TestServiceConfiguration:
         auth_service = AuthenticationService()
 
         # Mock database health check
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
             mock_mongodb.health_check.return_value = {"status": "healthy"}
@@ -468,7 +465,7 @@ class TestServiceErrorHandling:
         auth_service = AuthenticationService()
 
         # Test with invalid input
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
             mock_mongodb.find_document.side_effect = Exception("Database error")
@@ -485,7 +482,7 @@ class TestServiceErrorHandling:
         # Test with invalid repository ID
         invalid_id = uuid4()
 
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
             mock_mongodb.get_repository.return_value = None
@@ -529,7 +526,7 @@ class TestServicePerformance:
         auth_service = AuthenticationService()
 
         # Test concurrent user lookups
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
             mock_mongodb.find_document.return_value = None
@@ -555,7 +552,7 @@ class TestServiceDataConsistency:
         repository_id = uuid4()
         session_id = uuid4()
 
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 

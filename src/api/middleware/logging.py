@@ -15,7 +15,8 @@ from fastapi import Depends, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ...services.auth_service import User, auth_service
+from ...models.user import User
+from ...services.auth_service import auth_service
 from ...utils.config_loader import get_settings
 
 # Security scheme for JWT tokens
