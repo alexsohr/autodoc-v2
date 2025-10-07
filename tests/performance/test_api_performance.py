@@ -264,7 +264,7 @@ class TestDatabasePerformance:
     @pytest.mark.performance
     async def test_mongodb_query_performance(self):
         """Test MongoDB query performance"""
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter") as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -296,7 +296,7 @@ class TestDatabasePerformance:
     @pytest.mark.performance
     async def test_vector_search_performance(self):
         """Test vector search performance"""
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter") as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -562,7 +562,7 @@ class TestResourceCleanup:
     @pytest.mark.performance
     async def test_connection_cleanup(self):
         """Test database connection cleanup"""
-        from src.utils.mongodb_adapter import MongoDBAdapter
+        from src.services.data_access import MongoDBAdapter
 
         # Test connection lifecycle
         adapter = MongoDBAdapter()

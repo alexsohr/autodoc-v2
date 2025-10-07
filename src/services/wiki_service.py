@@ -13,10 +13,10 @@ from uuid import UUID
 from ..agents.wiki_agent import wiki_agent
 from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
+from ..repository.database import get_database
 from ..tools.context_tool import context_tool
 from ..tools.llm_tool import llm_tool
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,20 @@ class WikiGenerationService:
     content generation, and documentation management.
     """
 
-    def __init__(self):
-        """Initialize wiki generation service"""
+    def __init__(self, wiki_structure_repo=None):
+        """Initialize wiki generation service with repository dependency injection"""
         self.settings = get_settings()
+        # Repository will be injected or lazily loaded
+        self._wiki_structure_repo = wiki_structure_repo
+
+    async def _get_wiki_structure_repo(self):
+        """Get wiki structure repository instance (lazy loading)"""
+        if self._wiki_structure_repo is None:
+            from ..repository.wiki_structure_repository import WikiStructureRepository
+            from ..models.wiki import WikiStructure
+            
+            self._wiki_structure_repo = WikiStructureRepository(WikiStructure)
+        return self._wiki_structure_repo
 
     async def generate_wiki(
         self, repository_id: UUID, force_regenerate: bool = False
@@ -46,8 +57,11 @@ class WikiGenerationService:
         """
         try:
             # Check if repository exists and is analyzed
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.get_repository(repository_id)
+            wiki_structure_repo = await self._get_wiki_structure_repo()
+            from ..repository.repository_repository import RepositoryRepository
+            from ..models.repository import Repository
+            repo_repository = RepositoryRepository(Repository)
+            repository = await repo_repository.find_one({"id": repository_id})
 
             if not repository:
                 return {
@@ -57,8 +71,11 @@ class WikiGenerationService:
                 }
 
             # Check if repository is analyzed
-            doc_count = await mongodb.count_documents(
-                "code_documents", {"repository_id": str(repository_id)}
+            # Get document count using database directly
+            database = await get_database()
+            code_documents_collection = database["code_documents"]
+            doc_count = await code_documents_collection.count_documents(
+                {"repository_id": str(repository_id)}
             )
             if doc_count == 0:
                 return {
@@ -108,12 +125,13 @@ class WikiGenerationService:
             Dictionary with wiki structure
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            wiki_structure_repo = await self._get_wiki_structure_repo()
 
             # Get wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -143,6 +161,7 @@ class WikiGenerationService:
             # Create complete wiki structure
             wiki_structure = WikiStructure(
                 id=wiki_data["id"],
+                repository_id=repository_id,
                 title=wiki_data["title"],
                 description=wiki_data["description"],
                 pages=pages,
@@ -187,12 +206,13 @@ class WikiGenerationService:
             Dictionary with page data
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            wiki_structure_repo = await self._get_wiki_structure_repo()
 
             # Get wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -256,12 +276,13 @@ class WikiGenerationService:
             Dictionary with update result
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            wiki_structure_repo = await self._get_wiki_structure_repo()
 
             # Update page content in wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -291,7 +312,7 @@ class WikiGenerationService:
             wiki_data["pages"] = pages
             wiki_data["updated_at"] = datetime.now(timezone.utc)
 
-            success = await mongodb.update_document(
+            success = await wiki_structure_repo.update_one(
                 "wiki_structures",
                 {"repository_id": str(repository_id)},
                 {"pages": pages, "updated_at": wiki_data["updated_at"]},
@@ -340,10 +361,13 @@ class WikiGenerationService:
             Dictionary with PR creation result
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            wiki_structure_repo = await self._get_wiki_structure_repo()
 
             # Get repository
-            repository = await mongodb.get_repository(repository_id)
+            from ..repository.repository_repository import RepositoryRepository
+            from ..models.repository import Repository
+            repo_repository = RepositoryRepository(Repository)
+            repository = await repo_repository.find_one({"id": repository_id})
             if not repository:
                 return {
                     "status": "error",
@@ -352,9 +376,10 @@ class WikiGenerationService:
                 }
 
             # Get wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
             if not wiki_data:
                 return {
                     "status": "error",
@@ -423,6 +448,7 @@ class WikiGenerationService:
             # Create filtered structure
             filtered_structure = WikiStructure(
                 id=wiki_structure.id,
+                repository_id=wiki_structure.repository_id,
                 title=wiki_structure.title,
                 description=wiki_structure.description,
                 pages=filtered_pages,
@@ -720,12 +746,13 @@ This pull request contains updated documentation generated by AutoDoc v2.
             Dictionary with regeneration result
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            wiki_structure_repo = await self._get_wiki_structure_repo()
 
             # Get wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
             if not wiki_data:
                 return {
                     "status": "error",

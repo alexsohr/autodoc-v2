@@ -31,8 +31,8 @@ def test_app():
     """Create a test FastAPI application"""
     # Mock database operations for testing
     with (
-        patch("src.utils.database.init_database"),
-        patch("src.utils.database.close_database"),
+        patch("src.services.data_access.init_mongodb"),
+        patch("src.services.data_access.close_mongodb"),
     ):
         app = create_app()
         return app

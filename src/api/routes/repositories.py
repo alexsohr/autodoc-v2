@@ -21,7 +21,8 @@ from ...models.repository import (
     RepositoryResponse,
     RepositoryUpdate,
 )
-from ...services.auth_service import User, auth_service
+from ...models.user import User
+from ...services.auth_service import auth_service
 from ...services.repository_service import repository_service
 from ...utils.config_loader import get_settings
 
@@ -46,8 +47,8 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
 
 
 @router.post(
-    "/", 
-    response_model=RepositoryResponse, 
+    "/",
+    response_model=RepositoryResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Register a new repository",
     description="Register a code repository for analysis and documentation generation. The repository will be automatically analyzed and indexed for chat queries and wiki generation.",
@@ -61,8 +62,8 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
                             "description": "Register a public GitHub repository",
                             "value": {
                                 "url": "https://github.com/fastapi/fastapi",
-                                "branch": "main"
-                            }
+                                "branch": "main",
+                            },
                         },
                         "github_private": {
                             "summary": "GitHub Private Repository",
@@ -70,17 +71,17 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
                             "value": {
                                 "url": "https://github.com/myorg/private-repo",
                                 "provider": "github",
-                                "branch": "develop"
-                            }
+                                "branch": "develop",
+                            },
                         },
                         "gitlab_repo": {
                             "summary": "GitLab Repository",
                             "description": "Register a GitLab repository",
                             "value": {
                                 "url": "https://gitlab.com/myorg/my-project",
-                                "provider": "gitlab"
-                            }
-                        }
+                                "provider": "gitlab",
+                            },
+                        },
                     }
                 }
             }
@@ -102,13 +103,13 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
                             "webhook_configured": False,
                             "subscribed_events": [],
                             "created_at": "2024-01-01T12:00:00Z",
-                            "updated_at": "2024-01-01T12:00:00Z"
+                            "updated_at": "2024-01-01T12:00:00Z",
                         }
                     }
-                }
+                },
             }
-        }
-    }
+        },
+    },
 )
 async def create_repository(
     repository_data: RepositoryCreate, current_user: User = Depends(get_current_user)
@@ -197,36 +198,40 @@ async def create_repository(
                                     "webhook_configured": True,
                                     "subscribed_events": ["push", "pull_request"],
                                     "created_at": "2024-01-01T12:00:00Z",
-                                    "updated_at": "2024-01-01T12:30:00Z"
+                                    "updated_at": "2024-01-01T12:30:00Z",
                                 }
                             ],
                             "total": 1,
                             "limit": 50,
-                            "offset": 0
+                            "offset": 0,
                         }
                     }
-                }
+                },
             }
         }
-    }
+    },
 )
 async def list_repositories(
     limit: int = Query(
         50, ge=1, le=100, description="Number of repositories to return"
     ),
     offset: int = Query(0, ge=0, description="Number of repositories to skip"),
-    status: Optional[AnalysisStatus] = Query(None, description="Filter by analysis status"),
-    provider: Optional[RepositoryProvider] = Query(None, description="Filter by repository provider"),
+    status: Optional[AnalysisStatus] = Query(
+        None, description="Filter by analysis status"
+    ),
+    provider: Optional[RepositoryProvider] = Query(
+        None, description="Filter by repository provider"
+    ),
     current_user: User = Depends(get_current_user),
 ):
     """List repositories with pagination and filtering"""
     try:
         # Get repositories using service
         result = await repository_service.list_repositories(
-            limit=limit, 
-            offset=offset, 
-            status_filter=status.value if status else None, 
-            provider_filter=provider.value if provider else None
+            limit=limit,
+            offset=offset,
+            status_filter=status.value if status else None,
+            provider_filter=provider.value if provider else None,
         )
 
         if result["status"] != "success":
@@ -268,15 +273,6 @@ async def list_repositories(
     summary="Get repository details",
     description="Retrieve detailed information about a specific repository including analysis status and webhook configuration.",
     openapi_extra={
-        "parameters": [
-            {
-                "name": "repository_id",
-                "in": "path",
-                "required": True,
-                "schema": {"type": "string", "format": "uuid"},
-                "example": "550e8400-e29b-41d4-a716-446655440000"
-            }
-        ],
         "responses": {
             "200": {
                 "description": "Repository details",
@@ -297,10 +293,10 @@ async def list_repositories(
                             "subscribed_events": ["push", "pull_request"],
                             "last_webhook_event": "2024-01-01T13:00:00Z",
                             "created_at": "2024-01-01T12:00:00Z",
-                            "updated_at": "2024-01-01T12:30:00Z"
+                            "updated_at": "2024-01-01T12:30:00Z",
                         }
                     }
-                }
+                },
             },
             "404": {
                 "description": "Repository not found",
@@ -308,13 +304,13 @@ async def list_repositories(
                     "application/json": {
                         "example": {
                             "error": "Repository not found",
-                            "message": "Repository with ID 550e8400-e29b-41d4-a716-446655440000 does not exist"
+                            "message": "Repository with ID 550e8400-e29b-41d4-a716-446655440000 does not exist",
                         }
                     }
-                }
-            }
+                },
+            },
         }
-    }
+    },
 )
 async def get_repository(
     repository_id: UUID, current_user: User = Depends(get_current_user)
@@ -427,23 +423,18 @@ async def delete_repository(
                         "basic_analysis": {
                             "summary": "Basic Analysis",
                             "description": "Trigger analysis with default settings",
-                            "value": {}
+                            "value": {},
                         },
                         "force_analysis": {
                             "summary": "Force Re-analysis",
                             "description": "Force re-analysis even if already completed",
-                            "value": {
-                                "force": True
-                            }
+                            "value": {"force": True},
                         },
                         "specific_branch": {
                             "summary": "Analyze Specific Branch",
                             "description": "Analyze a specific branch instead of default",
-                            "value": {
-                                "branch": "develop",
-                                "force": False
-                            }
-                        }
+                            "value": {"branch": "develop", "force": False},
+                        },
                     }
                 }
             }
@@ -459,13 +450,13 @@ async def delete_repository(
                             "progress": 0,
                             "current_step": "Analysis started",
                             "estimated_completion": "2024-01-01T12:45:00Z",
-                            "message": "Analysis started successfully"
+                            "message": "Analysis started successfully",
                         }
                     }
-                }
+                },
             }
-        }
-    }
+        },
+    },
 )
 async def trigger_repository_analysis(
     repository_id: UUID,
@@ -559,8 +550,8 @@ async def trigger_repository_analysis(
                                     "commit_sha": "abc123def456789012345678901234567890abcd",
                                     "documents_processed": 245,
                                     "embeddings_generated": 1250,
-                                    "error_message": None
-                                }
+                                    "error_message": None,
+                                },
                             },
                             "processing": {
                                 "summary": "Analysis In Progress",
@@ -573,8 +564,8 @@ async def trigger_repository_analysis(
                                     "commit_sha": None,
                                     "documents_processed": 110,
                                     "embeddings_generated": 560,
-                                    "error_message": None
-                                }
+                                    "error_message": None,
+                                },
                             },
                             "failed": {
                                 "summary": "Analysis Failed",
@@ -587,15 +578,15 @@ async def trigger_repository_analysis(
                                     "commit_sha": None,
                                     "documents_processed": 0,
                                     "embeddings_generated": 0,
-                                    "error_message": "Failed to clone repository: Permission denied"
-                                }
-                            }
+                                    "error_message": "Failed to clone repository: Permission denied",
+                                },
+                            },
                         }
                     }
-                }
+                },
             }
         }
-    }
+    },
 )
 async def get_analysis_status(
     repository_id: UUID, current_user: User = Depends(get_current_user)

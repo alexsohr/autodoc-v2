@@ -168,6 +168,12 @@ class Settings(BaseSettings):
     enable_tracing: bool = Field(default=False, description="Enable tracing")
     jaeger_endpoint: Optional[str] = Field(default=None, description="Jaeger endpoint")
 
+    # LangSmith settings
+    langsmith_api_key: Optional[str] = Field(default=None, description="LangSmith API key")
+    langsmith_project: str = Field(default="autodoc-v2", description="LangSmith project name")
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com", description="LangSmith API endpoint")
+    langsmith_tracing: bool = Field(default=True, description="Enable LangSmith tracing")
+
     # Development settings
     reload: bool = Field(default=True, description="Auto-reload on changes")
     workers: int = Field(default=1, description="Number of workers")
@@ -234,6 +240,24 @@ class Settings(BaseSettings):
             },
         }
         return configs.get(provider, {})
+
+    def configure_langsmith(self) -> None:
+        """Configure LangSmith environment variables"""
+        import os
+        
+        if self.langsmith_tracing and self.langsmith_api_key:
+            os.environ["LANGCHAIN_TRACING_V2"] = "true"
+            os.environ["LANGCHAIN_API_KEY"] = self.langsmith_api_key
+            os.environ["LANGCHAIN_PROJECT"] = self.langsmith_project
+            os.environ["LANGCHAIN_ENDPOINT"] = self.langsmith_endpoint
+        else:
+            # Disable tracing if not configured
+            os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
+    @property
+    def is_langsmith_enabled(self) -> bool:
+        """Check if LangSmith tracing is enabled and configured"""
+        return self.langsmith_tracing and self.langsmith_api_key is not None
 
 
 # Global settings instance

@@ -18,8 +18,8 @@ from pydantic import BaseModel, Field
 
 from ..models.code_document import CodeDocument
 from ..models.config import LLMProvider
+from ..repository.database import get_database
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -217,14 +217,15 @@ class EmbeddingTool(BaseTool):
         """
         try:
             # Get MongoDB adapter
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             # Store embedding
-            await mongodb.store_document_embedding(document_id, embedding)
+            await dal.store_document_embedding(document_id, embedding)
 
             # Store additional metadata if provided
             if metadata:
-                await mongodb.update_document(
+                await dal.update_document(
                     "code_documents",
                     {"id": document_id},
                     {"embedding_metadata": metadata},
@@ -268,14 +269,15 @@ class EmbeddingTool(BaseTool):
         """
         try:
             # Get MongoDB adapter
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             # Perform vector search
             from uuid import UUID
 
             repo_uuid = UUID(repository_id) if repository_id else None
 
-            results = await mongodb.vector_search(
+            results = await dal.vector_search(
                 query_embedding=query_embedding,
                 repository_id=repo_uuid,
                 language_filter=language_filter,
@@ -579,7 +581,8 @@ class EmbeddingTool(BaseTool):
         """
         try:
             # Get MongoDB adapter
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             # Find all documents for repository
             query = {"repository_id": repository_id}
@@ -587,7 +590,7 @@ class EmbeddingTool(BaseTool):
                 # Only process documents without embeddings
                 query["embedding"] = {"$exists": False}
 
-            documents = await mongodb.find_documents("code_documents", query)
+            documents = await dal.find_documents("code_documents", query)
 
             if not documents:
                 return {
@@ -639,7 +642,8 @@ class EmbeddingTool(BaseTool):
             Dictionary with embedding statistics
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             # Build query
             query = {}
@@ -647,14 +651,14 @@ class EmbeddingTool(BaseTool):
                 query["repository_id"] = repository_id
 
             # Count total documents
-            total_docs = await mongodb.count_documents("code_documents", query)
+            total_docs = await dal.count_documents("code_documents", query)
 
             # Count documents with embeddings
             query_with_embedding = {
                 **query,
                 "embedding": {"$exists": True, "$ne": None},
             }
-            docs_with_embeddings = await mongodb.count_documents(
+            docs_with_embeddings = await dal.count_documents(
                 "code_documents", query_with_embedding
             )
 
@@ -671,7 +675,8 @@ class EmbeddingTool(BaseTool):
             ]
 
             language_stats = {}
-            collection = mongodb.get_collection("code_documents")
+            # Database already available from import
+            collection = database["code_documents"]
             async for doc in collection.aggregate(pipeline):
                 language_stats[doc["_id"]] = {
                     "count": doc["count"],

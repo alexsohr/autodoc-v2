@@ -19,9 +19,9 @@ from pydantic import BaseModel, Field
 
 from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
+from ..repository.database import get_database
 from ..tools.context_tool import context_tool
 from ..tools.llm_tool import llm_tool
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class WikiGenerationAgent:
 
         # Error handling
         workflow.add_edge("handle_error", END)
-        
+
         app = workflow.compile()
         logger.debug(f"Wiki generation workflow:\n {app.get_graph().draw_mermaid()}")
         return app
@@ -275,9 +275,10 @@ Remember:
         try:
             # Check if wiki already exists
             if not force_regenerate:
-                mongodb = await get_mongodb_adapter()
-                existing_wiki = await mongodb.find_document(
-                    "wiki_structures", {"repository_id": repository_id}
+                # Use database directly for generic operations
+                database = await get_database()
+                existing_wiki = await database["wiki_structures"].find_one(
+                    {"repository_id": repository_id}
                 )
                 if existing_wiki:
                     return {
@@ -334,11 +335,12 @@ Remember:
             state["current_step"] = "analyzing_repository"
             state["progress"] = 10.0
 
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             # Get repository information
-            repository = await mongodb.find_document(
-                "repositories", {"id": state["repository_id"]}
+            repository = await database["repositories"].find_one(
+                {"id": state["repository_id"]}
             )
             if not repository:
                 state["error_message"] = "Repository not found"
@@ -347,9 +349,10 @@ Remember:
             state["repository_info"] = repository
 
             # Get file tree from processed documents
-            documents = await mongodb.find_documents(
-                "code_documents", {"repository_id": state["repository_id"]}, limit=1000
-            )
+            documents_cursor = database["code_documents"].find(
+                {"repository_id": state["repository_id"]}
+            ).limit(1000)
+            documents = await documents_cursor.to_list(length=1000)
 
             if not documents:
                 state["error_message"] = "No processed documents found for repository"
@@ -518,6 +521,7 @@ Remember:
             # Create complete wiki structure
             wiki_structure = WikiStructure(
                 id=f"wiki_{state['repository_id']}",
+                repository_id=state["repository_id"],
                 title=wiki_data["title"],
                 description=wiki_data["description"],
                 pages=wiki_pages,
@@ -526,17 +530,18 @@ Remember:
             )
 
             # Store in database
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             # Delete existing wiki if force regenerating
-            await mongodb.delete_document(
-                "wiki_structures", {"repository_id": state["repository_id"]}
+            await database["wiki_structures"].delete_one(
+                {"repository_id": state["repository_id"]}
             )
 
             # Store new wiki
             wiki_dict = wiki_structure.model_dump()
             wiki_dict["repository_id"] = state["repository_id"]
-            await mongodb.insert_document("wiki_structures", wiki_dict)
+            await database["wiki_structures"].insert_one(wiki_dict)
 
             state["progress"] = 100.0
 
@@ -852,13 +857,13 @@ Remember:
             List of file information dictionaries
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
             relevant_files = []
 
             for file_path in file_paths:
-                doc = await mongodb.find_document(
-                    "code_documents",
-                    {"repository_id": repository_id, "file_path": file_path},
+                doc = await database["code_documents"].find_one(
+                    {"repository_id": repository_id, "file_path": file_path}
                 )
 
                 if doc:
@@ -918,8 +923,9 @@ Remember:
                 file_path = result["file_path"]
                 if file_path not in exclude_files:
                     # Get full document content
-                    mongodb = await get_mongodb_adapter()
-                    doc = await mongodb.find_document(
+                    # Use database directly for generic operations
+                    database = await get_database()
+                    doc = await dal.find_document(
                         "code_documents",
                         {"repository_id": repository_id, "file_path": file_path},
                     )
@@ -954,11 +960,12 @@ Remember:
             Dictionary with wiki generation status
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             # Check if wiki exists
-            wiki = await mongodb.find_document(
-                "wiki_structures", {"repository_id": repository_id}
+            wiki = await database["wiki_structures"].find_one(
+                {"repository_id": repository_id}
             )
 
             if wiki:

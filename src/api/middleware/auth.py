@@ -12,7 +12,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.requests import Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ...services.auth_service import TokenData, User, auth_service
+from ...models.user import TokenData, User
+from ...services.auth_service import auth_service
 from ...utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)

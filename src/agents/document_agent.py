@@ -16,10 +16,10 @@ from langgraph.prebuilt import ToolNode
 
 from ..models.code_document import CodeDocument, CodeDocumentCreate
 from ..models.repository import AnalysisStatus, Repository
+from ..repository.database import get_database
 from ..tools.embedding_tool import embedding_tool
 from ..tools.repository_tool import repository_tool
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,9 @@ class DocumentProcessingAgent:
         # Error handling
         workflow.add_edge("handle_error", "cleanup")
         app = workflow.compile()
-        logger.debug(f"Document processing workflow:\n {app.get_graph().draw_mermaid()}")
+        logger.debug(
+            f"Document processing workflow:\n {app.get_graph().draw_mermaid()}"
+        )
         return app
 
     async def process_repository(
@@ -364,7 +366,8 @@ class DocumentProcessingAgent:
                 return state
 
             # Store documents in MongoDB
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
             stored_count = 0
 
             for doc_data in state["processed_documents"]:
@@ -374,8 +377,8 @@ class DocumentProcessingAgent:
                     code_document = CodeDocument(**doc_data)
 
                     # Store in database
-                    await mongodb.insert_document(
-                        "code_documents", code_document.model_dump()
+                    await database["code_documents"].insert_one(
+                        code_document.model_dump()
                     )
                     stored_count += 1
 
@@ -527,7 +530,8 @@ class DocumentProcessingAgent:
             commit_sha: Optional commit SHA
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             updates = {
                 "analysis_status": status.value,
@@ -542,9 +546,7 @@ class DocumentProcessingAgent:
             if error_message:
                 updates["error_message"] = error_message
 
-            await mongodb.update_document(
-                "repositories", {"id": repository_id}, updates
-            )
+            await database["repositories"].update_one({"id": repository_id}, {"$set": updates})
 
         except Exception as e:
             logger.error(f"Failed to update repository status: {e}")
@@ -559,24 +561,22 @@ class DocumentProcessingAgent:
             Dictionary with current processing status
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            # Use database directly for generic operations
+            database = await get_database()
 
             # Get repository
-            repository = await mongodb.find_document(
-                "repositories", {"id": repository_id}
-            )
+            repository = await database["repositories"].find_one({"id": repository_id})
             if not repository:
                 return {"status": "not_found", "error": "Repository not found"}
 
             # Get document count
-            doc_count = await mongodb.count_documents(
-                "code_documents", {"repository_id": repository_id}
+            doc_count = await database["code_documents"].count_documents(
+                {"repository_id": repository_id}
             )
 
             # Get embedding count
-            embedding_count = await mongodb.count_documents(
-                "code_documents",
-                {"repository_id": repository_id, "embedding": {"$exists": True}},
+            embedding_count = await database["code_documents"].count_documents(
+                {"repository_id": repository_id, "embedding": {"$exists": True}}
             )
 
             return {

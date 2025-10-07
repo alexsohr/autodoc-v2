@@ -6,6 +6,7 @@ structured error responses, logging, and monitoring integration.
 
 import logging
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 

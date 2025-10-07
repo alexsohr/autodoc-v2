@@ -15,7 +15,8 @@ AutoDoc v2 is an intelligent documentation generation system that automatically 
 - **⚡ Real-time Updates**: Webhook-driven automatic documentation updates
 
 ### Technical Excellence
-- **🏗️ Modern Architecture**: FastAPI + LangGraph + MongoDB with vector search
+- **🏗️ Clean Architecture**: Repository pattern with dependency injection and proper separation of concerns
+- **⚡ Modern Stack**: FastAPI + LangGraph + MongoDB with vector search + Beanie ODM
 - **🔒 Enterprise Security**: JWT authentication, webhook signature validation, injection prevention
 - **📊 Performance Optimized**: P50 ≤ 500ms API responses, streaming chat with ≤ 1500ms first token
 - **📚 Interactive API Documentation**: Comprehensive Swagger UI with examples and real-time testing
@@ -61,6 +62,12 @@ docker run -d --name autodoc-mongo -p 27017:27017 mongo:7.0
 
 5. **Run the application:**
 ```bash
+# Recommended for development (includes cache cleaning)
+make dev-run                    # Linux/macOS/WSL
+.\scripts\dev-run.ps1          # Windows PowerShell
+dev-run.bat                    # Windows Command Prompt
+
+# Alternative: Direct startup
 python -m src.api.main
 ```
 
@@ -104,12 +111,48 @@ OPENAI_API_KEY=your-openai-api-key
 GOOGLE_API_KEY=your-google-api-key
 OLLAMA_BASE_URL=http://localhost:11434
 
+# LangSmith (Development Tracing & Monitoring)
+LANGSMITH_API_KEY=your-langsmith-api-key
+LANGSMITH_PROJECT=autodoc-v2
+LANGSMITH_TRACING=true
+
 # Optional: AWS S3 (if using S3 storage)
 AWS_ACCESS_KEY_ID=your-aws-access-key
 AWS_SECRET_ACCESS_KEY=your-aws-secret-key
 AWS_REGION=us-east-1
 S3_BUCKET_NAME=autodoc-storage
 ```
+
+### 🔍 LangSmith Integration
+
+AutoDoc v2 includes built-in LangSmith integration for comprehensive tracing and monitoring of AI operations during development:
+
+**Key Features:**
+- **🔍 LLM Call Tracing**: Monitor all OpenAI, Google, and other LLM provider interactions
+- **🤖 Agent Workflow Tracking**: Trace LangGraph agent decision-making and tool usage
+- **📊 Performance Analytics**: Track response times, token usage, and costs
+- **🐛 Debugging Support**: Inspect conversation flows and identify bottlenecks
+- **📈 Usage Insights**: Understand patterns and optimize AI operations
+
+**Configuration:**
+```env
+# Enable LangSmith tracing (development only)
+LANGSMITH_API_KEY=your-langsmith-api-key    # Required for tracing
+LANGSMITH_PROJECT=autodoc-v2                # Project name in dashboard
+LANGSMITH_TRACING=true                      # Enable/disable tracing
+```
+
+**Getting Started:**
+1. Sign up for a free LangSmith account at [smith.langchain.com](https://smith.langchain.com)
+2. Generate an API key in your LangSmith dashboard
+3. Add the API key to your `.env` file
+4. Start the server - all AI operations will be automatically traced
+
+When enabled, you'll see detailed traces for:
+- Repository analysis workflows
+- Wiki generation processes
+- Chat conversations and RAG operations
+- Document embedding and retrieval
 
 ## 📖 Usage
 
@@ -345,6 +388,36 @@ flowchart TD
 - **🛡️ Security Layer**: JWT authentication, webhook validation, rate limiting
 - **📊 Observability**: Structured logging, performance monitoring, health checks
 
+### Architectural Improvements
+
+AutoDoc v2 follows a **clean, layered architecture** with proper separation of concerns:
+
+#### **🏗️ Repository Pattern Implementation**
+- **API Layer** → **Service Layer** → **Repository Layer** → **Data Access Layer**
+- Clean dependency injection with lazy loading
+- Testable components with mocked dependencies
+- Type-safe operations throughout the stack
+
+#### **📁 Organized Code Structure**
+```
+src/
+├── api/                    # FastAPI endpoints & middleware
+├── services/               # Business logic (clean, no data access)
+├── repository/             # Data access layer & repository implementations
+│   ├── data_access.py     # Core database infrastructure
+│   └── *_repository.py    # Domain-specific repositories
+├── agents/                 # LangGraph AI workflows
+├── tools/                  # Shared AI tools & utilities
+├── models/                 # Pydantic/Beanie data models
+└── utils/                  # Configuration & utilities
+```
+
+#### **🔄 Dependency Flow**
+- **APIs** call **Services** for business logic
+- **Services** use **Repositories** for data operations
+- **Repositories** use **Data Access Layer** for database operations
+- **Agents & Tools** access data through the same clean interfaces
+
 ### Webhook Processing Sequence
 
 ```mermaid
@@ -469,6 +542,13 @@ graph TB
         ChatSvc[Chat Service]
     end
     
+    subgraph "Repository Layer"
+        RepoRepo[Repository Repositories]
+        DataAccess[Data Access Layer]
+        
+        RepoRepo --> DataAccess
+    end
+    
     subgraph "Agent Layer (LangGraph)"
         DocAgent[Document Processing Agent]
         WikiAgent[Wiki Generation Agent]
@@ -508,6 +588,12 @@ graph TB
     Routes --> WikiSvc
     Routes --> ChatSvc
     
+    AuthSvc --> RepoRepo
+    RepoSvc --> RepoRepo
+    DocSvc --> RepoRepo
+    WikiSvc --> RepoRepo
+    ChatSvc --> RepoRepo
+    
     RepoSvc --> DocAgent
     WikiSvc --> WikiAgent
     ChatSvc --> ContextTool
@@ -515,8 +601,10 @@ graph TB
     
     DocAgent --> RepoTool
     DocAgent --> EmbedTool
+    DocAgent --> DataAccess
     WikiAgent --> ContextTool
     WikiAgent --> LLMTool
+    WikiAgent --> DataAccess
     
     RepoTool --> GitHub
     EmbedTool --> OpenAI
@@ -538,6 +626,7 @@ graph TB
 - **[LangChain](https://langchain.com/)**: LLM integration and tooling
 - **[Pydantic](https://pydantic.dev/)**: Data validation and structured output
 - **[MongoDB](https://www.mongodb.com/)**: Document storage with vector search
+- **[Beanie](https://beanie-odm.dev/)**: Async MongoDB ODM with repository pattern
 
 ### AI & ML
 - **[OpenAI GPT](https://openai.com/)**: Primary LLM provider
@@ -569,6 +658,10 @@ AutoDoc v2 is designed for enterprise-scale performance:
 ```bash
 # Install test dependencies
 pip install -e ".[test]"
+
+# Clean cache before testing (recommended)
+make clean-cache               # Linux/macOS/WSL
+python scripts/clean_cache.py  # Any platform
 
 # Run all tests
 pytest
@@ -605,8 +698,17 @@ python -m flake8 src/ tests/
 # Install in development mode
 pip install -e ".[dev]"
 
-# Start with auto-reload
-python -m src.api.main --reload
+# Start development server (recommended - includes cache cleaning)
+make dev-run                    # Linux/macOS/WSL
+.\scripts\dev-run.ps1          # Windows PowerShell
+dev-run.bat                    # Windows Command Prompt
+
+# Alternative: Start without cache cleaning
+python -m src.api.main
+
+# Clean cache manually (if needed)
+make clean-cache               # Linux/macOS/WSL
+python scripts/clean_cache.py  # Any platform
 
 # Run with debug logging
 LOG_LEVEL=DEBUG python -m src.api.main
@@ -615,13 +717,126 @@ LOG_LEVEL=DEBUG python -m src.api.main
 open http://localhost:8000/docs
 ```
 
+#### 🧹 Cache Management
+
+AutoDoc v2 includes automatic cache cleaning for development to prevent issues with Python cache files:
+
+**What gets cleaned:**
+- `__pycache__` directories (recursively)
+- `*.egg-info` directories  
+- `.mypy_cache`, `.pytest_cache` directories
+- `build/`, `dist/`, `htmlcov/` directories
+- `.coverage` files and `*.pyc`/`*.pyo` files
+
+**When to use cache cleaning:**
+- Starting a new development session
+- After switching Git branches
+- When experiencing import errors
+- Before running tests
+- After installing/updating dependencies
+
+**Available commands:**
+```bash
+# Cross-platform cache cleaning
+python scripts/clean_cache.py
+
+# Development server with cache cleaning (recommended)
+make dev-run                    # Linux/macOS/WSL
+.\scripts\dev-run.ps1          # Windows PowerShell
+dev-run.bat                    # Windows Command Prompt
+
+# Cache cleaning only
+make clean-cache               # Linux/macOS/WSL
+.\scripts\dev-run.ps1 -CleanOnly  # Windows PowerShell
+
+# Start server without cleaning (original behavior)
+make run                       # Linux/macOS/WSL
+python -m src.api.main         # Any platform
+```
+
+### Development Scripts
+
+AutoDoc v2 includes several utility scripts in the `scripts/` directory to streamline development:
+
+#### Cache Management Scripts
+- **`scripts/clean_cache.py`**: Cross-platform Python cache cleaner
+- **`scripts/dev-run.ps1`**: Windows PowerShell development server with cache cleaning
+- **`scripts/README.md`**: Comprehensive documentation for all development scripts
+- **`dev-run.bat`**: Windows batch file for easy server startup
+
+#### Usage Examples
+```bash
+# Cross-platform cache cleaning
+python scripts/clean_cache.py
+
+# Windows PowerShell (multiple options)
+.\scripts\dev-run.ps1           # Clean cache + start server
+.\scripts\dev-run.ps1 -CleanOnly # Clean cache only
+.\scripts\dev-run.ps1 -SkipClean # Start server without cleaning
+.\scripts\dev-run.ps1 -Help     # Show help
+
+# Windows Command Prompt
+dev-run.bat
+
+# Make targets (Linux/macOS/WSL)
+make clean-cache    # Clean cache only
+make dev-run        # Clean cache + start server
+make run           # Start server without cleaning
+```
+
 ### API Development Workflow
 
-1. **Design First**: Use the interactive Swagger UI to design and test endpoints
-2. **Implement**: Write FastAPI route handlers with Pydantic models
-3. **Document**: Add comprehensive examples and descriptions using OpenAPI extras
-4. **Test**: Use the Swagger UI to test endpoints during development
-5. **Validate**: Ensure all examples work correctly in the documentation
+1. **Setup**: Use `make dev-run` or `.\scripts\dev-run.ps1` to start with a clean environment
+2. **Design First**: Use the interactive Swagger UI to design and test endpoints
+3. **Implement**: Write FastAPI route handlers with Pydantic models
+4. **Document**: Add comprehensive examples and descriptions using OpenAPI extras
+5. **Test**: Use the Swagger UI to test endpoints during development
+6. **Validate**: Ensure all examples work correctly in the documentation
+
+### Architecture Guidelines
+
+When developing new features, follow these architectural principles:
+
+#### **🎯 Separation of Concerns**
+- **API Layer**: Only handle HTTP concerns (request/response, validation, auth)
+- **Service Layer**: Contain all business logic, orchestrate workflows
+- **Repository Layer**: Abstract data access, provide domain-specific operations
+- **Data Access Layer**: Handle generic database operations, connections
+
+#### **💉 Dependency Injection**
+```python
+# Services receive repositories via constructor injection
+class DocumentService:
+    def __init__(self, code_document_repo=None):
+        self._code_document_repo = code_document_repo
+    
+    async def _get_code_document_repo(self):
+        if self._code_document_repo is None:
+            from ..repository import data_access
+            dal = await data_access.get_data_access()
+            self._code_document_repo = dal.code_documents
+        return self._code_document_repo
+```
+
+#### **🧪 Testing Strategy**
+- **Unit Tests**: Mock repository dependencies in services
+- **Integration Tests**: Test full request/response cycles
+- **Repository Tests**: Test data access patterns
+- **Contract Tests**: Validate API contracts
+
+#### **📁 File Organization**
+```
+src/
+├── api/                    # FastAPI endpoints & middleware
+├── services/               # Business logic (clean, no data access)
+├── repository/             # Data access layer & repository implementations
+│   ├── data_access.py     # Core database infrastructure
+│   └── *_repository.py    # Domain-specific repositories
+├── agents/                 # LangGraph AI workflows
+├── tools/                  # Shared AI tools & utilities
+├── models/                 # Pydantic/Beanie data models
+└── utils/                  # Configuration & utilities
+```
 
 ## 🚀 Deployment
 

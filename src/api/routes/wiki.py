@@ -13,7 +13,7 @@ from fastapi.responses import Response
 
 from ...models.code_document import FileList
 from ...models.wiki import PullRequestRequest, WikiPageDetail, WikiStructure
-from ...services.auth_service import User
+from ...models.user import User
 from ...services.document_service import document_service
 from ...services.wiki_service import wiki_service
 

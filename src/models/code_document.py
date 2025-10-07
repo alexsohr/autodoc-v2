@@ -9,12 +9,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pymongo import ASCENDING, DESCENDING, TEXT, IndexModel
 
-from .base import BaseSerializers
+from .base import BaseDocument, BaseSerializers
 
 
-class CodeDocument(BaseSerializers):
+class CodeDocument(BaseDocument):
     """CodeDocument model for processed code files
 
     Represents a processed code file for semantic search and analysis.
@@ -47,9 +48,20 @@ class CodeDocument(BaseSerializers):
         description="Last update timestamp",
     )
 
-    model_config = ConfigDict(
-        validate_assignment=True
-    )
+    class Settings:
+        name = "code_documents"
+        indexes = [
+            IndexModel(
+                [("repository_id", ASCENDING), ("file_path", ASCENDING)], unique=True
+            ),
+            IndexModel("repository_id"),
+            IndexModel("language"),
+            IndexModel([("created_at", DESCENDING)]),
+            IndexModel([("updated_at", DESCENDING)]),
+            IndexModel([("processed_content", TEXT)]),
+        ]
+
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("file_path")
     @classmethod

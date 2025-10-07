@@ -19,7 +19,7 @@ from ...models.chat import (
     QuestionRequest,
     SessionStatus,
 )
-from ...services.auth_service import User
+from ...models.user import User
 from ...services.chat_service import chat_service
 
 logger = logging.getLogger(__name__)
@@ -60,13 +60,13 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
                             "created_at": "2024-01-01T12:00:00Z",
                             "last_activity": "2024-01-01T12:00:00Z",
                             "status": "active",
-                            "message_count": 0
+                            "message_count": 0,
                         }
                     }
-                }
+                },
             }
         }
-    }
+    },
 )
 async def create_chat_session(
     repository_id: UUID, current_user: User = Depends(get_current_user)
@@ -293,31 +293,31 @@ async def delete_chat_session(
                             "description": "Ask about overall architecture or patterns",
                             "value": {
                                 "content": "How does authentication work in this application?",
-                                "context_hint": "auth"
-                            }
+                                "context_hint": "auth",
+                            },
                         },
                         "specific_function": {
                             "summary": "Specific Function Question",
                             "description": "Ask about a specific function or method",
                             "value": {
                                 "content": "What does the create_user function do and what parameters does it accept?",
-                                "context_hint": "user creation"
-                            }
+                                "context_hint": "user creation",
+                            },
                         },
                         "debugging_help": {
                             "summary": "Debugging Question",
                             "description": "Ask for help understanding error handling",
                             "value": {
                                 "content": "How are validation errors handled in the API endpoints?"
-                            }
+                            },
                         },
                         "best_practices": {
                             "summary": "Best Practices Question",
                             "description": "Ask about code patterns and best practices",
                             "value": {
                                 "content": "What testing patterns are used in this codebase?"
-                            }
-                        }
+                            },
+                        },
                     }
                 }
             }
@@ -336,8 +336,8 @@ async def delete_chat_session(
                                 "context_files": [
                                     "src/auth/authentication.py",
                                     "src/middleware/auth_middleware.py",
-                                    "src/models/user.py"
-                                ]
+                                    "src/models/user.py",
+                                ],
                             },
                             "answer": {
                                 "id": "789e1234-e89b-12d3-a456-426614174002",
@@ -350,19 +350,19 @@ async def delete_chat_session(
                                         "line_end": 25,
                                         "commit_sha": "abc123def456789012345678901234567890abcd",
                                         "url": "https://github.com/myorg/myrepo/blob/main/src/auth/authentication.py#L15-L25",
-                                        "excerpt": "def authenticate_user(username: str, password: str):\\n    # JWT token generation logic\\n    ..."
+                                        "excerpt": "def authenticate_user(username: str, password: str):\\n    # JWT token generation logic\\n    ...",
                                     }
                                 ],
                                 "confidence_score": 0.92,
                                 "generation_time": 2.3,
-                                "timestamp": "2024-01-01T12:05:02Z"
-                            }
+                                "timestamp": "2024-01-01T12:05:02Z",
+                            },
                         }
                     }
-                }
+                },
             }
-        }
-    }
+        },
+    },
 )
 async def ask_question(
     repository_id: UUID,

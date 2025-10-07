@@ -10,8 +10,9 @@ from typing import List, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pymongo import ASCENDING, DESCENDING, TEXT, IndexModel
 
-from .base import BaseSerializers
+from .base import BaseDocument, BaseSerializers
 
 
 class SessionStatus(str, Enum):
@@ -40,9 +41,7 @@ class Citation(BaseModel):
     # Content excerpt
     excerpt: Optional[str] = Field(default=None, description="Relevant code snippet")
 
-    model_config = ConfigDict(
-        validate_assignment=True
-    )
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("file_path")
     @classmethod
@@ -137,7 +136,7 @@ class Citation(BaseModel):
         )
 
 
-class Answer(BaseSerializers):
+class Answer(BaseDocument):
     """AI-generated response to user question
 
     Contains the generated answer with citations, confidence metrics,
@@ -164,9 +163,15 @@ class Answer(BaseSerializers):
         description="Answer timestamp",
     )
 
-    model_config = ConfigDict(
-        validate_assignment=True
-    )
+    class Settings:
+        name = "answers"
+        indexes = [
+            IndexModel([("question_id", ASCENDING)], unique=True),
+            IndexModel([("timestamp", DESCENDING)]),
+            IndexModel([("confidence_score", DESCENDING)]),
+        ]
+
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("content")
     @classmethod
@@ -219,7 +224,7 @@ class Answer(BaseSerializers):
         return f"Answer(id={self.id}, question_id={self.question_id}, confidence={self.confidence_score:.2f})"
 
 
-class Question(BaseSerializers):
+class Question(BaseDocument):
     """User query about the codebase
 
     Represents a user's question with context and metadata
@@ -241,10 +246,19 @@ class Question(BaseSerializers):
     context_nodes: List[str] = Field(
         default_factory=list, description="Relevant analysis node IDs used for context"
     )
-
-    model_config = ConfigDict(
-        validate_assignment=True
+    context_files: List[str] = Field(
+        default_factory=list, description="File paths used for semantic context"
     )
+
+    class Settings:
+        name = "questions"
+        indexes = [
+            IndexModel([("session_id", ASCENDING)]),
+            IndexModel([("timestamp", DESCENDING)]),
+            IndexModel([("content", TEXT)]),
+        ]
+
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("content")
     @classmethod
@@ -270,7 +284,7 @@ class Question(BaseSerializers):
         return f"Question(id={self.id}, session_id={self.session_id})"
 
 
-class ChatSession(BaseSerializers):
+class ChatSession(BaseDocument):
     """Conversational query session for a repository
 
     Manages a conversation session with state tracking
@@ -299,10 +313,16 @@ class ChatSession(BaseSerializers):
         default=0, description="Number of questions in this session"
     )
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        use_enum_values=True
-    )
+    class Settings:
+        name = "chat_sessions"
+        indexes = [
+            IndexModel([("repository_id", ASCENDING)]),
+            IndexModel([("status", ASCENDING)]),
+            IndexModel([("last_activity", DESCENDING)]),
+            IndexModel([("created_at", DESCENDING)]),
+        ]
+
+    model_config = ConfigDict(validate_assignment=True, use_enum_values=True)
 
     @field_validator("message_count")
     @classmethod
@@ -380,7 +400,6 @@ class QuestionResponse(BaseSerializers):
     model_config = ConfigDict()
 
 
-
 class AnswerResponse(BaseSerializers):
     """Answer response model for API"""
 
@@ -393,7 +412,6 @@ class AnswerResponse(BaseSerializers):
     timestamp: datetime = Field(description="Answer timestamp")
 
     model_config = ConfigDict()
-
 
 
 class QuestionAnswer(BaseModel):
@@ -413,10 +431,7 @@ class ChatSessionResponse(BaseSerializers):
     status: SessionStatus = Field(description="Session status")
     message_count: int = Field(description="Number of questions in this session")
 
-    model_config = ConfigDict(
-        use_enum_values=True
-    )
-
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class ChatSessionList(BaseModel):
@@ -439,4 +454,3 @@ class ConversationHistory(BaseSerializers):
     has_more: bool = Field(description="Whether there are more results")
 
     model_config = ConfigDict()
-

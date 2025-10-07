@@ -656,7 +656,7 @@ class TestSemanticSearchAndRAG:
             )
 
             # Mock efficient vector search
-            with patch("src.utils.mongodb_adapter.MongoDBAdapter") as mock_mongo:
+            with patch("src.services.data_access.MongoDBAdapter") as mock_mongo:
                 mock_mongo_instance = MagicMock()
                 mock_mongo.return_value = mock_mongo_instance
 

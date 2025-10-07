@@ -23,10 +23,10 @@ from ..models.chat import (
     QuestionResponse,
     SessionStatus,
 )
+from ..repository.repository_repository import RepositoryRepository
 from ..tools.context_tool import context_tool
 from ..tools.llm_tool import llm_tool
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +38,43 @@ class ChatService:
     question answering with RAG, and conversation history tracking.
     """
 
-    def __init__(self):
-        """Initialize chat service"""
+    def __init__(self, chat_session_repo=None, question_repo=None, answer_repo=None):
+        """Initialize chat service with repository dependency injection"""
         self.settings = get_settings()
         self.session_timeout_hours = 24  # Sessions expire after 24 hours
         self.max_context_documents = 10
         self.min_confidence_threshold = 0.3
+        # Repositories will be injected or lazily loaded
+        self._chat_session_repo = chat_session_repo
+        self._question_repo = question_repo
+        self._answer_repo = answer_repo
+
+    async def _get_chat_session_repo(self):
+        """Get chat session repository instance (lazy loading)"""
+        if self._chat_session_repo is None:
+            from ..repository.chat_session_repository import ChatSessionRepository
+            from ..models.chat import ChatSession
+            
+            self._chat_session_repo = ChatSessionRepository(ChatSession)
+        return self._chat_session_repo
+
+    async def _get_question_repo(self):
+        """Get question repository instance (lazy loading)"""
+        if self._question_repo is None:
+            from ..repository.question_repository import QuestionRepository
+            from ..models.chat import Question
+            
+            self._question_repo = QuestionRepository(Question)
+        return self._question_repo
+
+    async def _get_answer_repo(self):
+        """Get answer repository instance (lazy loading)"""
+        if self._answer_repo is None:
+            from ..repository.answer_repository import AnswerRepository
+            from ..models.chat import Answer
+            
+            self._answer_repo = AnswerRepository(Answer)
+        return self._answer_repo
 
     async def create_chat_session(self, repository_id: UUID) -> Dict[str, Any]:
         """Create a new chat session for repository
@@ -56,8 +87,9 @@ class ChatService:
         """
         try:
             # Check if repository exists and is analyzed
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.get_repository(repository_id)
+            from ..models.repository import Repository
+            repo_repository = RepositoryRepository(Repository)
+            repository = await repo_repository.find_one({"id": repository_id})
 
             if not repository:
                 return {
@@ -67,8 +99,11 @@ class ChatService:
                 }
 
             # Check if repository has processed documents
-            doc_count = await mongodb.count_documents(
-                "code_documents", {"repository_id": str(repository_id)}
+            from ..repository.code_document_repository import CodeDocumentRepository
+            from ..models.code_document import CodeDocument
+            code_document_repo = CodeDocumentRepository(CodeDocument)
+            doc_count = await code_document_repo.count(
+                {"repository_id": str(repository_id)}
             )
             if doc_count == 0:
                 return {
@@ -81,11 +116,8 @@ class ChatService:
             chat_session = ChatSession(repository_id=repository_id)
 
             # Store in database
-            session_dict = chat_session.model_dump()
-            session_dict["id"] = str(chat_session.id)
-            session_dict["repository_id"] = str(repository_id)
-
-            await mongodb.insert_document("chat_sessions", session_dict)
+            chat_session_repo = await self._get_chat_session_repo()
+            await chat_session_repo.insert(chat_session)
 
             return {
                 "status": "success",
@@ -121,13 +153,13 @@ class ChatService:
             Dictionary with session details
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            chat_session_repo = await self._get_chat_session_repo()
 
             # Get session
-            session_data = await mongodb.find_document(
-                "chat_sessions",
-                {"id": str(session_id), "repository_id": str(repository_id)},
+            session = await chat_session_repo.find_one(
+                {"id": str(session_id), "repository_id": str(repository_id)}
             )
+            session_data = chat_session_repo.serialize(session) if session else None
 
             if not session_data:
                 return {
@@ -186,7 +218,7 @@ class ChatService:
             Dictionary with session list
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            chat_session_repo = await self._get_chat_session_repo()
 
             # Build query
             query = {"repository_id": str(repository_id)}
@@ -194,13 +226,13 @@ class ChatService:
                 query["status"] = status_filter
 
             # Get sessions
-            sessions_data = await mongodb.find_documents(
-                "chat_sessions",
+            sessions = await chat_session_repo.find_many(
                 query,
                 limit=limit,
                 offset=offset,
-                sort_field="last_activity",
+                sort=[("last_activity", -1)],
             )
+            sessions_data = chat_session_repo.serialize_many(sessions)
 
             # Convert to response format
             sessions = []
@@ -226,7 +258,7 @@ class ChatService:
                 )
 
             # Get total count
-            total_count = await mongodb.count_documents("chat_sessions", query)
+            total_count = await chat_session_repo.count(query)
 
             return {
                 "status": "success",
@@ -259,13 +291,15 @@ class ChatService:
             Dictionary with deletion result
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            chat_session_repo = await self._get_chat_session_repo()
+            question_repo = await self._get_question_repo()
+            answer_repo = await self._get_answer_repo()
 
             # Check if session exists
-            session_data = await mongodb.find_document(
-                "chat_sessions",
-                {"id": str(session_id), "repository_id": str(repository_id)},
+            session = await chat_session_repo.find_one(
+                {"id": str(session_id), "repository_id": str(repository_id)}
             )
+            session_data = chat_session_repo.serialize(session) if session else None
 
             if not session_data:
                 return {
@@ -275,27 +309,22 @@ class ChatService:
                 }
 
             # Delete session and associated Q&A
-            async with await mongodb.client.start_session() as db_session:
-                async with db_session.start_transaction():
-                    # Delete questions and answers
-                    questions = await mongodb.find_documents(
-                        "questions", {"session_id": str(session_id)}
-                    )
-                    for question in questions:
-                        await mongodb.delete_document(
-                            "answers",
-                            {"question_id": question["id"]},
-                            session=db_session,
-                        )
+            # TODO: Implement proper transaction handling in data access layer
 
-                    await mongodb.delete_document(
-                        "questions", {"session_id": str(session_id)}, session=db_session
-                    )
+            # Delete questions and answers
+            questions = await question_repo.find_many(
+                {"session_id": str(session_id)}
+            )
+            for question in questions:
+                question_data = question_repo.serialize(question)
+                await answer_repo.delete_one(
+                    {"question_id": question_data["id"]}
+                )
 
-                    # Delete session
-                    await mongodb.delete_document(
-                        "chat_sessions", {"id": str(session_id)}, session=db_session
-                    )
+            await question_repo.delete_many({"session_id": str(session_id)})
+
+            # Delete session
+            await chat_session_repo.delete_one({"id": str(session_id)})
 
             return {"status": "success", "message": "Session deleted successfully"}
 
@@ -395,23 +424,18 @@ class ChatService:
             )
 
             # Store question and answer
-            mongodb = await get_mongodb_adapter()
+            question_repo = await self._get_question_repo()
+            answer_repo = await self._get_answer_repo()
+            chat_session_repo = await self._get_chat_session_repo()
 
             # Store question
-            question_dict = question.model_dump()
-            question_dict["id"] = str(question.id)
-            question_dict["session_id"] = str(session_id)
-            await mongodb.insert_document("questions", question_dict)
+            await question_repo.insert(question)
 
             # Store answer
-            answer_dict = answer.model_dump()
-            answer_dict["id"] = str(answer.id)
-            answer_dict["question_id"] = str(question.id)
-            await mongodb.insert_document("answers", answer_dict)
+            await answer_repo.insert(answer)
 
             # Update session activity
-            await mongodb.update_document(
-                "chat_sessions",
+            await chat_session_repo.update_one(
                 {"id": str(session_id)},
                 {
                     "last_activity": datetime.now(timezone.utc),
@@ -477,7 +501,8 @@ class ChatService:
             if session_result["status"] != "success":
                 return session_result
 
-            mongodb = await get_mongodb_adapter()
+            question_repo = await self._get_question_repo()
+            answer_repo = await self._get_answer_repo()
 
             # Build query for questions
             question_query = {"session_id": str(session_id)}
@@ -485,13 +510,12 @@ class ChatService:
                 question_query["timestamp"] = {"$lt": before}
 
             # Get questions
-            questions_data = await mongodb.find_documents(
-                "questions",
+            questions = await question_repo.find_many(
                 question_query,
                 limit=limit,
-                sort_field="timestamp",
-                sort_direction=-1,  # Most recent first
+                sort=[("timestamp", -1)],  # Most recent first
             )
+            questions_data = question_repo.serialize_many(questions)
 
             # Get answers for questions
             question_answer_pairs = []
@@ -501,9 +525,10 @@ class ChatService:
                 question = Question(**question_data)
 
                 # Get corresponding answer
-                answer_data = await mongodb.find_document(
-                    "answers", {"question_id": str(question.id)}
+                answer = await answer_repo.find_one(
+                    {"question_id": str(question.id)}
                 )
+                answer_data = answer_repo.serialize(answer) if answer else None
 
                 if answer_data:
                     answer_data["id"] = UUID(answer_data["id"])
@@ -647,7 +672,7 @@ class ChatService:
             Dictionary with expiration results
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            chat_session_repo = await self._get_chat_session_repo()
 
             # Calculate cutoff time
             cutoff_time = datetime.now(timezone.utc) - timedelta(
@@ -655,19 +680,18 @@ class ChatService:
             )
 
             # Find expired sessions
-            expired_sessions = await mongodb.find_documents(
-                "chat_sessions",
+            expired_sessions = await chat_session_repo.find_many(
                 {
                     "status": SessionStatus.ACTIVE.value,
                     "last_activity": {"$lt": cutoff_time},
-                },
+                }
             )
 
             # Expire sessions
             expired_count = 0
-            for session_data in expired_sessions:
-                await mongodb.update_document(
-                    "chat_sessions",
+            for session in expired_sessions:
+                session_data = chat_session_repo.serialize(session)
+                await chat_session_repo.update_one(
                     {"id": session_data["id"]},
                     {"status": SessionStatus.EXPIRED.value},
                 )
@@ -712,9 +736,8 @@ class ChatService:
             session_id: Session UUID
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            await mongodb.update_document(
-                "chat_sessions",
+            chat_session_repo = await self._get_chat_session_repo()
+            await chat_session_repo.update_one(
                 {"id": str(session_id)},
                 {"status": SessionStatus.EXPIRED.value},
             )
@@ -733,7 +756,8 @@ class ChatService:
             Dictionary with chat statistics
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            chat_session_repo = await self._get_chat_session_repo()
+            question_repo = await self._get_question_repo()
 
             # Build base query
             base_query = {}
@@ -741,28 +765,28 @@ class ChatService:
                 base_query["repository_id"] = str(repository_id)
 
             # Get session statistics
-            total_sessions = await mongodb.count_documents("chat_sessions", base_query)
-            active_sessions = await mongodb.count_documents(
-                "chat_sessions", {**base_query, "status": SessionStatus.ACTIVE.value}
+            total_sessions = await chat_session_repo.count(base_query)
+            active_sessions = await chat_session_repo.count(
+                {**base_query, "status": SessionStatus.ACTIVE.value}
             )
 
             # Get question statistics
             if repository_id:
                 # Get questions for this repository's sessions
-                session_ids = []
-                sessions = await mongodb.find_documents("chat_sessions", base_query)
-                session_ids = [session["id"] for session in sessions]
+                sessions = await chat_session_repo.find_many(base_query)
+                session_ids = [chat_session_repo.serialize(session)["id"] for session in sessions]
 
                 question_query = {"session_id": {"$in": session_ids}}
             else:
                 question_query = {}
 
-            total_questions = await mongodb.count_documents("questions", question_query)
+            total_questions = await question_repo.count(question_query)
 
             # Get recent activity
-            recent_sessions = await mongodb.find_documents(
-                "chat_sessions", base_query, limit=5, sort_field="last_activity"
+            recent_sessions_docs = await chat_session_repo.find_many(
+                base_query, limit=5, sort=[("last_activity", -1)]
             )
+            recent_sessions = chat_session_repo.serialize_many(recent_sessions_docs)
 
             return {
                 "status": "success",

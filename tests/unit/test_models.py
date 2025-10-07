@@ -312,6 +312,7 @@ class TestWikiModels:
 
         wiki = WikiStructure(
             id="wiki1",
+            repository_id=uuid4(),
             title="Test Wiki",
             description="Test wiki structure",
             pages=pages,
@@ -348,6 +349,7 @@ class TestWikiModels:
         with pytest.raises(ValueError):
             WikiStructure(
                 id="wiki1",
+                repository_id=uuid4(),
                 title="Test Wiki",
                 description="Test wiki structure",
                 pages=pages,
@@ -570,6 +572,7 @@ class TestModelSerialization:
 
         wiki = WikiStructure(
             id="wiki1",
+            repository_id=uuid4(),
             title="Test Wiki",
             description="Test description",
             pages=[page],
