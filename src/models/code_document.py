@@ -58,7 +58,11 @@ class CodeDocument(BaseDocument):
             IndexModel("language"),
             IndexModel([("created_at", DESCENDING)]),
             IndexModel([("updated_at", DESCENDING)]),
-            IndexModel([("processed_content", TEXT)]),
+            IndexModel(
+                [("processed_content", TEXT)],
+                default_language="none",
+                language_override="text_search_language",
+            ),
         ]
 
     model_config = ConfigDict(validate_assignment=True)

@@ -636,6 +636,7 @@ graph TB
 
 ### DevOps & Quality
 - **[pytest](https://pytest.org/)**: Comprehensive testing framework
+- **[pytest-bdd](https://pytest-bdd.readthedocs.io/)**: BDD/Cucumber-style testing with Gherkin syntax
 - **[Black](https://black.readthedocs.io/)**: Code formatting
 - **[isort](https://pycqa.github.io/isort/)**: Import organization
 - **[structlog](https://structlog.org/)**: Structured logging
@@ -672,8 +673,65 @@ pytest tests/integration/   # Integration tests
 pytest tests/performance/   # Performance tests
 pytest tests/security/      # Security tests
 
+# Run BDD/Cucumber tests
+pytest tests/bdd/ -v                    # All BDD tests
+pytest tests/bdd/test_repositories.py   # Repository API scenarios
+pytest tests/bdd/test_chat.py           # Chat API scenarios
+pytest tests/bdd/test_wiki.py           # Wiki API scenarios
+
 # Run with coverage
 pytest --cov=src --cov-report=html
+```
+
+### BDD Testing (Cucumber-Style)
+
+AutoDoc v2 includes BDD tests using **pytest-bdd** with Gherkin syntax for readable, behavior-driven API testing.
+
+#### Test Structure
+```
+tests/bdd/
+├── features/               # Gherkin .feature files
+│   ├── repositories.feature   # Repository management scenarios
+│   ├── chat.feature          # Chat workflow scenarios
+│   └── wiki.feature          # Wiki generation scenarios
+├── step_defs/              # Step implementations
+│   ├── common_steps.py       # Shared auth & assertion steps
+│   ├── repository_steps.py   # Repository API steps
+│   ├── chat_steps.py         # Chat API steps
+│   └── wiki_steps.py         # Wiki API steps
+├── test_repositories.py    # Test runner for repositories
+├── test_chat.py            # Test runner for chat
+└── test_wiki.py            # Test runner for wiki
+```
+
+#### Running BDD Tests
+```bash
+# Run all BDD tests (55 scenarios)
+pytest tests/bdd/ -v
+
+# Run specific feature
+pytest tests/bdd/test_repositories.py -v
+pytest tests/bdd/test_chat.py -v
+pytest tests/bdd/test_wiki.py -v
+
+# Run by keyword
+pytest tests/bdd/ -k "register" -v    # All registration scenarios
+pytest tests/bdd/ -k "webhook" -v     # Webhook-related scenarios
+```
+
+#### Example Feature File
+```gherkin
+Feature: Repository Management
+  As an API user
+  I want to manage code repositories
+  So that I can generate documentation
+
+  Scenario: Register a new GitHub repository
+    Given I am authenticated as an admin user
+    When I register a repository with URL "https://github.com/test-org/test-repo"
+    Then the response status should be 201
+    And the repository should have status "pending"
+    And the repository provider should be "github"
 ```
 
 ### Code Quality
