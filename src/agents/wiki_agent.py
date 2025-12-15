@@ -925,9 +925,8 @@ Remember:
                     # Get full document content
                     # Use database directly for generic operations
                     database = await get_database()
-                    doc = await dal.find_document(
-                        "code_documents",
-                        {"repository_id": repository_id, "file_path": file_path},
+                    doc = await database["code_documents"].find_one(
+                        {"repository_id": repository_id, "file_path": file_path}
                     )
 
                     if doc:
