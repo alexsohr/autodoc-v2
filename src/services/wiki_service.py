@@ -10,12 +10,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from ..agents.wiki_agent import wiki_agent
+from ..agents.wiki_agent import WikiGenerationAgent
 from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
-from ..repository.database import get_database
-from ..tools.context_tool import context_tool
-from ..tools.llm_tool import llm_tool
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..repository.wiki_structure_repository import WikiStructureRepository
+from ..tools.context_tool import ContextTool
+from ..tools.llm_tool import LLMTool
 from ..utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -28,20 +29,29 @@ class WikiGenerationService:
     content generation, and documentation management.
     """
 
-    def __init__(self, wiki_structure_repo=None):
-        """Initialize wiki generation service with repository dependency injection"""
+    def __init__(
+        self,
+        wiki_structure_repo: WikiStructureRepository,
+        code_document_repo: CodeDocumentRepository,
+        wiki_agent: WikiGenerationAgent,
+        context_tool: ContextTool,
+        llm_tool: LLMTool,
+    ):
+        """Initialize wiki generation service with dependency injection.
+        
+        Args:
+            wiki_structure_repo: WikiStructureRepository instance (injected via DI).
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+            wiki_agent: WikiGenerationAgent instance (injected via DI).
+            context_tool: ContextTool instance (injected via DI).
+            llm_tool: LLMTool instance (injected via DI).
+        """
         self.settings = get_settings()
-        # Repository will be injected or lazily loaded
         self._wiki_structure_repo = wiki_structure_repo
-
-    async def _get_wiki_structure_repo(self):
-        """Get wiki structure repository instance (lazy loading)"""
-        if self._wiki_structure_repo is None:
-            from ..repository.wiki_structure_repository import WikiStructureRepository
-            from ..models.wiki import WikiStructure
-            
-            self._wiki_structure_repo = WikiStructureRepository(WikiStructure)
-        return self._wiki_structure_repo
+        self._code_document_repo = code_document_repo
+        self._wiki_agent = wiki_agent
+        self._context_tool = context_tool
+        self._llm_tool = llm_tool
 
     async def generate_wiki(
         self, repository_id: UUID, force_regenerate: bool = False
@@ -57,7 +67,6 @@ class WikiGenerationService:
         """
         try:
             # Check if repository exists and is analyzed
-            wiki_structure_repo = await self._get_wiki_structure_repo()
             from ..repository.repository_repository import RepositoryRepository
             from ..models.repository import Repository
             repo_repository = RepositoryRepository(Repository)
@@ -71,12 +80,7 @@ class WikiGenerationService:
                 }
 
             # Check if repository is analyzed
-            # Get document count using database directly
-            database = await get_database()
-            code_documents_collection = database["code_documents"]
-            doc_count = await code_documents_collection.count_documents(
-                {"repository_id": str(repository_id)}
-            )
+            doc_count = await self._code_document_repo.count({"repository_id": str(repository_id)})
             if doc_count == 0:
                 return {
                     "status": "error",
@@ -85,7 +89,7 @@ class WikiGenerationService:
                 }
 
             # Generate wiki using wiki agent
-            generation_result = await wiki_agent.generate_wiki(
+            generation_result = await self._wiki_agent.generate_wiki(
                 repository_id=str(repository_id), force_regenerate=force_regenerate
             )
 
@@ -125,13 +129,11 @@ class WikiGenerationService:
             Dictionary with wiki structure
         """
         try:
-            wiki_structure_repo = await self._get_wiki_structure_repo()
-
             # Get wiki structure
-            wiki = await wiki_structure_repo.find_one(
+            wiki = await self._wiki_structure_repo.find_one(
                 {"repository_id": str(repository_id)}
             )
-            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -206,13 +208,11 @@ class WikiGenerationService:
             Dictionary with page data
         """
         try:
-            wiki_structure_repo = await self._get_wiki_structure_repo()
-
             # Get wiki structure
-            wiki = await wiki_structure_repo.find_one(
+            wiki = await self._wiki_structure_repo.find_one(
                 {"repository_id": str(repository_id)}
             )
-            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -276,13 +276,11 @@ class WikiGenerationService:
             Dictionary with update result
         """
         try:
-            wiki_structure_repo = await self._get_wiki_structure_repo()
-
             # Update page content in wiki structure
-            wiki = await wiki_structure_repo.find_one(
+            wiki = await self._wiki_structure_repo.find_one(
                 {"repository_id": str(repository_id)}
             )
-            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -361,8 +359,6 @@ class WikiGenerationService:
             Dictionary with PR creation result
         """
         try:
-            wiki_structure_repo = await self._get_wiki_structure_repo()
-
             # Get repository
             from ..repository.repository_repository import RepositoryRepository
             from ..models.repository import Repository
@@ -376,10 +372,10 @@ class WikiGenerationService:
                 }
 
             # Get wiki structure
-            wiki = await wiki_structure_repo.find_one(
+            wiki = await self._wiki_structure_repo.find_one(
                 {"repository_id": str(repository_id)}
             )
-            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
             if not wiki_data:
                 return {
                     "status": "error",
@@ -711,7 +707,7 @@ This pull request contains updated documentation generated by AutoDoc v2.
         """
         try:
             # Use wiki agent to get status
-            status_result = await wiki_agent.get_wiki_generation_status(
+            status_result = await self._wiki_agent.get_wiki_generation_status(
                 str(repository_id)
             )
 
@@ -746,13 +742,11 @@ This pull request contains updated documentation generated by AutoDoc v2.
             Dictionary with regeneration result
         """
         try:
-            wiki_structure_repo = await self._get_wiki_structure_repo()
-
             # Get wiki structure
-            wiki = await wiki_structure_repo.find_one(
+            wiki = await self._wiki_structure_repo.find_one(
                 {"repository_id": str(repository_id)}
             )
-            wiki_data = wiki_structure_repo.serialize(wiki) if wiki else None
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
             if not wiki_data:
                 return {
                     "status": "error",
@@ -775,7 +769,7 @@ This pull request contains updated documentation generated by AutoDoc v2.
                 }
 
             # Regenerate page content using wiki agent
-            new_content = await wiki_agent._generate_page_content(
+            new_content = await self._wiki_agent._generate_page_content(
                 page_data, str(repository_id)
             )
 
@@ -810,5 +804,7 @@ This pull request contains updated documentation generated by AutoDoc v2.
             }
 
 
-# Global wiki generation service instance
-wiki_service = WikiGenerationService()
+# Deprecated: Module-level singleton removed
+# Use get_wiki_service() from src.dependencies with FastAPI's Depends() instead
+# from ..dependencies import get_wiki_service
+# wiki_service = get_wiki_service()  # REMOVED - use dependency injection

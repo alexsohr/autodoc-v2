@@ -81,6 +81,10 @@ class LLMTool(BaseTool):
     )
 
     def __init__(self):
+        """Initialize LLMTool.
+        
+        No dependencies to inject - this tool manages its own LLM providers.
+        """
         super().__init__()
         # Initialize settings and configuration
         settings = get_settings()
@@ -1018,4 +1022,6 @@ Instructions:
 
 
 # Tool instance for LangGraph
-llm_tool = LLMTool()
+# Deprecated: Module-level singleton removed
+# Use get_llm_tool() from src.dependencies with FastAPI's Depends() instead
+# llm_tool = LLMTool()  # REMOVED - use dependency injection

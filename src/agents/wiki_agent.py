@@ -19,9 +19,11 @@ from pydantic import BaseModel, Field
 
 from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
-from ..repository.database import get_database
-from ..tools.context_tool import context_tool
-from ..tools.llm_tool import llm_tool
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..repository.repository_repository import RepositoryRepository
+from ..repository.wiki_structure_repository import WikiStructureRepository
+from ..tools.context_tool import ContextTool
+from ..tools.llm_tool import LLMTool
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +91,23 @@ class WikiGenerationAgent:
     analysis to structured documentation creation with Mermaid diagrams.
     """
 
-    def __init__(self):
-        """Initialize wiki generation agent"""
+    def __init__(self, context_tool: ContextTool, llm_tool: LLMTool,
+                 wiki_structure_repo: WikiStructureRepository, repository_repo: RepositoryRepository, code_document_repo: CodeDocumentRepository):
+        """Initialize wiki generation agent with dependency injection.
+        
+        Args:
+            context_tool: ContextTool instance (injected via DI).
+            llm_tool: LLMTool instance (injected via DI).
+            wiki_structure_repo: WikiStructureRepository instance (injected via DI).
+            repository_repo: RepositoryRepository instance (injected via DI).
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+        """
+        self._context_tool = context_tool
+        self._llm_tool = llm_tool
+        self._wiki_structure_repo = wiki_structure_repo
+        self._repository_repo = repository_repo
+        self._code_document_repo = code_document_repo
+        
         self.workflow = self._create_workflow()
 
         # Load prompts from wiki-generation-prompts.md
@@ -275,16 +292,14 @@ Remember:
         try:
             # Check if wiki already exists
             if not force_regenerate:
-                # Use database directly for generic operations
-                database = await get_database()
-                existing_wiki = await database["wiki_structures"].find_one(
+                existing_wiki = await self._wiki_structure_repo.find_one(
                     {"repository_id": repository_id}
                 )
                 if existing_wiki:
                     return {
                         "status": "exists",
                         "message": "Wiki already exists for this repository",
-                        "wiki_id": existing_wiki.get("id"),
+                        "wiki_id": str(existing_wiki.id),
                     }
 
             # Initialize state
@@ -335,35 +350,33 @@ Remember:
             state["current_step"] = "analyzing_repository"
             state["progress"] = 10.0
 
-            # Use database directly for generic operations
-            database = await get_database()
-
-            # Get repository information
-            repository = await database["repositories"].find_one(
-                {"id": state["repository_id"]}
+            repository = await self._repository_repo.find_one(
+                {"id": UUID(state["repository_id"])}
             )
             if not repository:
                 state["error_message"] = "Repository not found"
                 return state
 
-            state["repository_info"] = repository
+            # Convert repository model to dict for state
+            state["repository_info"] = repository.model_dump(mode="python")
 
             # Get file tree from processed documents
-            documents_cursor = database["code_documents"].find(
-                {"repository_id": state["repository_id"]}
-            ).limit(1000)
-            documents = await documents_cursor.to_list(length=1000)
+            documents = await self._code_document_repo.find_many(
+                {"repository_id": UUID(state["repository_id"])},
+                limit=1000
+            )
 
             if not documents:
                 state["error_message"] = "No processed documents found for repository"
                 return state
 
             # Build file tree
-            file_paths = [doc["file_path"] for doc in documents]
+            file_paths = [doc.file_path for doc in documents]
             state["file_tree"] = self._build_file_tree(file_paths)
 
-            # Find and read README
-            readme_content = await self._find_readme_content(documents)
+            # Find and read README - convert models to dicts
+            documents_dicts = [doc.model_dump(mode="python") for doc in documents]
+            readme_content = await self._find_readme_content(documents_dicts)
             state["readme_content"] = readme_content
 
             state["progress"] = 20.0
@@ -529,19 +542,13 @@ Remember:
                 root_sections=wiki_data.get("root_sections", []),
             )
 
-            # Store in database
-            # Use database directly for generic operations
-            database = await get_database()
-
             # Delete existing wiki if force regenerating
-            await database["wiki_structures"].delete_one(
+            await self._wiki_structure_repo.delete_one(
                 {"repository_id": state["repository_id"]}
             )
 
             # Store new wiki
-            wiki_dict = wiki_structure.model_dump()
-            wiki_dict["repository_id"] = state["repository_id"]
-            await database["wiki_structures"].insert_one(wiki_dict)
+            await self._wiki_structure_repo.insert(wiki_structure)
 
             state["progress"] = 100.0
 
@@ -683,7 +690,7 @@ Remember:
         """
         try:
             # Generate structured wiki structure using LLM tool
-            generation_result = await llm_tool._arun(
+            generation_result = await self._llm_tool._arun(
                 "generate_structured",
                 prompt=structure_prompt,
                 schema=WikiStructureSchema,
@@ -825,7 +832,7 @@ Remember:
             )
 
             # Generate page content
-            generation_result = await llm_tool._arun(
+            generation_result = await self._llm_tool._arun(
                 "generate",
                 prompt=full_prompt,
                 system_message="You are an expert technical writer. Generate comprehensive, accurate wiki pages based solely on the provided source files.",
@@ -857,22 +864,20 @@ Remember:
             List of file information dictionaries
         """
         try:
-            # Use database directly for generic operations
-            database = await get_database()
             relevant_files = []
 
             for file_path in file_paths:
-                doc = await database["code_documents"].find_one(
+                doc = await self._code_document_repo.find_one(
                     {"repository_id": repository_id, "file_path": file_path}
                 )
 
                 if doc:
                     relevant_files.append(
                         {
-                            "file_path": doc["file_path"],
-                            "language": doc["language"],
-                            "content": doc["content"],
-                            "size": len(doc["content"]),
+                            "file_path": doc.file_path,
+                            "language": doc.language,
+                            "content": doc.content,
+                            "size": len(doc.content),
                         }
                     )
 
@@ -907,7 +912,7 @@ Remember:
             search_query = f"{page_title} {page_description}"
 
             # Perform context search
-            search_result = await context_tool._arun(
+            search_result = await self._context_tool._arun(
                 "search",
                 query=search_query,
                 repository_id=repository_id,
@@ -923,19 +928,17 @@ Remember:
                 file_path = result["file_path"]
                 if file_path not in exclude_files:
                     # Get full document content
-                    # Use database directly for generic operations
-                    database = await get_database()
-                    doc = await database["code_documents"].find_one(
+                    doc = await self._code_document_repo.find_one(
                         {"repository_id": repository_id, "file_path": file_path}
                     )
 
                     if doc:
                         additional_files.append(
                             {
-                                "file_path": doc["file_path"],
-                                "language": doc["language"],
-                                "content": doc["content"],
-                                "size": len(doc["content"]),
+                                "file_path": doc.file_path,
+                                "language": doc.language,
+                                "content": doc.content,
+                                "size": len(doc.content),
                                 "relevance_score": result["similarity_score"],
                             }
                         )
@@ -959,29 +962,26 @@ Remember:
             Dictionary with wiki generation status
         """
         try:
-            # Use database directly for generic operations
-            database = await get_database()
-
             # Check if wiki exists
-            wiki = await database["wiki_structures"].find_one(
-                {"repository_id": repository_id}
+            wiki = await self._wiki_structure_repo.find_one(
+                {"repository_id": UUID(repository_id)}
             )
 
             if wiki:
                 # Count pages with content
                 pages_with_content = sum(
                     1
-                    for page in wiki.get("pages", [])
-                    if page.get("content") and page["content"].strip()
+                    for page in wiki.pages
+                    if page.content and page.content.strip()
                 )
 
                 return {
                     "status": "completed",
                     "wiki_exists": True,
-                    "total_pages": len(wiki.get("pages", [])),
+                    "total_pages": len(wiki.pages),
                     "pages_with_content": pages_with_content,
-                    "wiki_title": wiki.get("title", ""),
-                    "last_updated": wiki.get("updated_at"),
+                    "wiki_title": wiki.title,
+                    "last_updated": wiki.updated_at,
                 }
             else:
                 return {
@@ -993,7 +993,3 @@ Remember:
         except Exception as e:
             logger.error(f"Failed to get wiki status: {e}")
             return {"status": "error", "error": str(e), "repository_id": repository_id}
-
-
-# Global agent instance
-wiki_agent = WikiGenerationAgent()

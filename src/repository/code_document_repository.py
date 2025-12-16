@@ -170,3 +170,22 @@ class CodeDocumentRepository(BaseRepository[CodeDocument]):
         final = list(merged.values())
         final.sort(key=lambda entry: entry["score"], reverse=True)
         return final[:k]
+
+    async def get_language_statistics(self, query: Dict[str, object]) -> Dict[str, int]:
+        """Get language statistics for documents matching the query.
+
+        Args:
+            query: Query filter
+
+        Returns:
+            Dictionary mapping language to count
+        """
+        pipeline = [
+            {"$match": self._prepare_query(query)},
+            {"$group": {"_id": "$language", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+        ]
+        language_stats = {}
+        async for doc in self.collection.aggregate(pipeline):
+            language_stats[doc["_id"]] = doc["count"]
+        return language_stats

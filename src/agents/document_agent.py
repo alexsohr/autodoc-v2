@@ -4,21 +4,21 @@ This module implements the document processing agent that handles
 repository analysis, file processing, and content preparation for embedding.
 """
 
-import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode
 
-from ..models.code_document import CodeDocument, CodeDocumentCreate
-from ..models.repository import AnalysisStatus, Repository
-from ..repository.database import get_database
-from ..tools.embedding_tool import embedding_tool
-from ..tools.repository_tool import repository_tool
+from ..models.code_document import CodeDocument
+from ..models.repository import AnalysisStatus
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..repository.repository_repository import RepositoryRepository
+from ..tools.embedding_tool import EmbeddingTool
+from ..tools.repository_tool import RepositoryTool
 from ..utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -48,9 +48,21 @@ class DocumentProcessingAgent:
     repository cloning to embedding generation and storage.
     """
 
-    def __init__(self):
-        """Initialize document processing agent"""
+    def __init__(self, repository_tool: RepositoryTool, embedding_tool: EmbeddingTool, 
+                 code_document_repo: CodeDocumentRepository, repository_repo: RepositoryRepository):
+        """Initialize document processing agent with dependency injection.
+        
+        Args:
+            repository_tool: RepositoryTool instance (injected via DI).
+            embedding_tool: EmbeddingTool instance (injected via DI).
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+            repository_repo: RepositoryRepository instance (injected via DI).
+        """
         self.settings = get_settings()
+        self._repository_tool = repository_tool
+        self._embedding_tool = embedding_tool
+        self._code_document_repo = code_document_repo
+        self._repository_repo = repository_repo
         self.workflow = self._create_workflow()
 
     def _create_workflow(self) -> StateGraph:
@@ -178,8 +190,7 @@ class DocumentProcessingAgent:
             state["current_step"] = "cloning_repository"
             state["progress"] = 10.0
 
-            # Clone repository using repository tool
-            clone_result = await repository_tool._arun(
+            clone_result = await self._repository_tool._arun(
                 "clone", repository_url=state["repository_url"], branch=state["branch"]
             )
 
@@ -217,8 +228,7 @@ class DocumentProcessingAgent:
                 state["error_message"] = "No clone path available for file discovery"
                 return state
 
-            # Discover files using repository tool
-            discovery_result = await repository_tool._arun(
+            discovery_result = await self._repository_tool._arun(
                 "discover_files", repository_path=state["clone_path"]
             )
 
@@ -326,8 +336,7 @@ class DocumentProcessingAgent:
                 )
                 return state
 
-            # Generate embeddings using embedding tool
-            embedding_result = await embedding_tool._arun(
+            embedding_result = await self._embedding_tool._arun(
                 "generate_and_store", documents=state["processed_documents"]
             )
 
@@ -365,21 +374,13 @@ class DocumentProcessingAgent:
                 state["progress"] = 100.0
                 return state
 
-            # Store documents in MongoDB
-            # Use database directly for generic operations
-            database = await get_database()
             stored_count = 0
 
             for doc_data in state["processed_documents"]:
                 try:
-                    # Convert to CodeDocument and store
                     doc_data["repository_id"] = UUID(state["repository_id"])
                     code_document = CodeDocument(**doc_data)
-
-                    # Store in database
-                    await database["code_documents"].insert_one(
-                        code_document.model_dump()
-                    )
+                    await self._code_document_repo.insert(code_document)
                     stored_count += 1
 
                 except Exception as e:
@@ -390,7 +391,6 @@ class DocumentProcessingAgent:
 
             state["progress"] = 100.0
 
-            # Add success message
             state["messages"].append(
                 AIMessage(content=f"Stored {stored_count} documents in database")
             )
@@ -410,7 +410,7 @@ class DocumentProcessingAgent:
 
             # Cleanup cloned repository
             if state["clone_path"]:
-                cleanup_result = await repository_tool._arun(
+                cleanup_result = await self._repository_tool._arun(
                     "cleanup", repository_path=state["clone_path"]
                 )
 
@@ -530,8 +530,6 @@ class DocumentProcessingAgent:
             commit_sha: Optional commit SHA
         """
         try:
-            # Use database directly for generic operations
-            database = await get_database()
 
             updates = {
                 "analysis_status": status.value,
@@ -546,7 +544,7 @@ class DocumentProcessingAgent:
             if error_message:
                 updates["error_message"] = error_message
 
-            await database["repositories"].update_one({"id": repository_id}, {"$set": updates})
+            await self._repository_repo.update(UUID(repository_id), updates)
 
         except Exception as e:
             logger.error(f"Failed to update repository status: {e}")
@@ -561,41 +559,31 @@ class DocumentProcessingAgent:
             Dictionary with current processing status
         """
         try:
-            # Use database directly for generic operations
-            database = await get_database()
 
-            # Get repository
-            repository = await database["repositories"].find_one({"id": repository_id})
+            repository = await self._repository_repo.get(UUID(repository_id))
             if not repository:
                 return {"status": "not_found", "error": "Repository not found"}
 
-            # Get document count
-            doc_count = await database["code_documents"].count_documents(
-                {"repository_id": repository_id}
-            )
+            doc_count = await self._code_document_repo.count({"repository_id": UUID(repository_id)})
 
-            # Get embedding count
-            embedding_count = await database["code_documents"].count_documents(
-                {"repository_id": repository_id, "embedding": {"$exists": True}}
+            embedding_count = await self._code_document_repo.count(
+                {"repository_id": UUID(repository_id), "embedding": {"$exists": True}}
             )
 
             return {
                 "status": "success",
                 "repository_id": repository_id,
-                "analysis_status": repository.get("analysis_status", "unknown"),
-                "last_analyzed": repository.get("last_analyzed"),
+                "analysis_status": repository.analysis_status.value if repository.analysis_status else "unknown",
+                "last_analyzed": repository.last_analyzed,
                 "total_documents": doc_count,
                 "documents_with_embeddings": embedding_count,
                 "embedding_coverage": (
                     (embedding_count / doc_count * 100) if doc_count > 0 else 0
                 ),
-                "error_message": repository.get("error_message"),
+                "error_message": repository.error_message,
             }
 
         except Exception as e:
             logger.error(f"Failed to get processing status: {e}")
             return {"status": "error", "error": str(e), "repository_id": repository_id}
 
-
-# Global agent instance
-document_agent = DocumentProcessingAgent()

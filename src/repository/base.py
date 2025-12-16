@@ -46,7 +46,7 @@ class BaseRepository(Generic[TDocument]):
         """Convert UUIDs (and nested structures) into Mongo-compatible values."""
 
         if isinstance(value, UUID):
-            # Don't convert UUIDs to strings anymore since we configured UUID representation
+            # Keep UUIDs as-is since they're stored as binary UUIDs in MongoDB
             return value
         if isinstance(value, datetime):
             return value

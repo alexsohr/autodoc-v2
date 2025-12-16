@@ -66,6 +66,10 @@ class RepositoryTool(BaseTool):
     description: str = "Tool for cloning Git repositories and analyzing their content"
 
     def __init__(self):
+        """Initialize RepositoryTool.
+        
+        No dependencies to inject - this tool manages repository operations independently.
+        """
         super().__init__()
         # Initialize settings and configuration
         settings = get_settings()
@@ -820,4 +824,6 @@ class RepositoryTool(BaseTool):
 
 
 # Tool instance for LangGraph
-repository_tool = RepositoryTool()
+# Deprecated: Module-level singleton removed
+# Use get_repository_tool() from src.dependencies with FastAPI's Depends() instead
+# repository_tool = RepositoryTool()  # REMOVED - use dependency injection

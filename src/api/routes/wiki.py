@@ -11,11 +11,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
+from ...dependencies import get_document_service, get_wiki_service
 from ...models.code_document import FileList
 from ...models.wiki import PullRequestRequest, WikiPageDetail, WikiStructure
 from ...models.user import User
-from ...services.document_service import document_service
-from ...services.wiki_service import wiki_service
+from ...services.document_service import DocumentProcessingService
+from ...services.wiki_service import WikiGenerationService
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +46,12 @@ async def get_wiki_structure(
     ),
     section_id: Optional[str] = Query(None, description="Filter to specific section"),
     current_user: User = Depends(get_current_user),
+    service: WikiGenerationService = Depends(get_wiki_service),
 ):
     """Get repository wiki structure"""
     try:
         # Get wiki structure using service
-        result = await wiki_service.get_wiki_structure(
+        result = await service.get_wiki_structure(
             repository_id=repository_id,
             include_content=include_content,
             section_filter=section_id,
@@ -96,11 +98,12 @@ async def get_wiki_page(
     page_id: str,
     format: str = Query("json", regex="^(json|markdown)$"),
     current_user: User = Depends(get_current_user),
+    service: WikiGenerationService = Depends(get_wiki_service),
 ):
     """Get specific wiki page"""
     try:
         # Get wiki page using service
-        result = await wiki_service.get_wiki_page(
+        result = await service.get_wiki_page(
             repository_id=repository_id, page_id=page_id, format=format
         )
 
@@ -144,6 +147,7 @@ async def create_documentation_pr(
     repository_id: UUID,
     pr_request: Optional[PullRequestRequest] = None,
     current_user: User = Depends(get_current_user),
+    service: WikiGenerationService = Depends(get_wiki_service),
 ):
     """Create documentation pull request"""
     try:
@@ -160,7 +164,7 @@ async def create_documentation_pr(
             force_update = pr_request.force_update
 
         # Create PR using service
-        result = await wiki_service.create_documentation_pull_request(
+        result = await service.create_documentation_pull_request(
             repository_id=repository_id,
             target_branch=target_branch,
             title=title,
@@ -234,11 +238,12 @@ async def get_repository_files(
     limit: int = Query(100, ge=1, le=1000, description="Number of files to return"),
     offset: int = Query(0, ge=0, description="Number of files to skip"),
     current_user: User = Depends(get_current_user),
+    service: DocumentProcessingService = Depends(get_document_service),
 ):
     """Get repository file list"""
     try:
         # Get repository files using service
-        result = await document_service.get_repository_documents(
+        result = await service.get_repository_documents(
             repository_id=repository_id,
             language_filter=language,
             path_pattern=path_pattern,

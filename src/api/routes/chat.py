@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
+from ...dependencies import get_chat_service
 from ...models.chat import (
     ChatSessionList,
     ChatSessionResponse,
@@ -20,7 +21,7 @@ from ...models.chat import (
     SessionStatus,
 )
 from ...models.user import User
-from ...services.chat_service import chat_service
+from ...services.chat_service import ChatService
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,14 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
     },
 )
 async def create_chat_session(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """Create chat session"""
     try:
         # Create session using service
-        result = await chat_service.create_chat_session(repository_id)
+        result = await service.create_chat_session(repository_id)
 
         if result["status"] != "success":
             error_type = result.get("error_type", "UnknownError")
@@ -133,6 +136,7 @@ async def list_chat_sessions(
     limit: int = Query(50, ge=1, le=100, description="Number of sessions to return"),
     offset: int = Query(0, ge=0, description="Number of sessions to skip"),
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """List chat sessions"""
     try:
@@ -147,7 +151,7 @@ async def list_chat_sessions(
             )
 
         # List sessions using service
-        result = await chat_service.list_chat_sessions(
+        result = await service.list_chat_sessions(
             repository_id=repository_id,
             status_filter=status_filter,
             limit=limit,
@@ -192,11 +196,12 @@ async def get_chat_session(
     repository_id: UUID,
     session_id: UUID,
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """Get chat session details"""
     try:
         # Get session using service
-        result = await chat_service.get_chat_session(repository_id, session_id)
+        result = await service.get_chat_session(repository_id, session_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -241,11 +246,12 @@ async def delete_chat_session(
     repository_id: UUID,
     session_id: UUID,
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """End chat session"""
     try:
         # Delete session using service
-        result = await chat_service.delete_chat_session(repository_id, session_id)
+        result = await service.delete_chat_session(repository_id, session_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -369,6 +375,7 @@ async def ask_question(
     session_id: UUID,
     question_request: QuestionRequest,
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """Submit a question about the repository codebase"""
     try:
@@ -383,7 +390,7 @@ async def ask_question(
             )
 
         # Ask question using service
-        result = await chat_service.ask_question(
+        result = await service.ask_question(
             repository_id=repository_id,
             session_id=session_id,
             question_request=question_request,
@@ -489,6 +496,7 @@ async def get_conversation_history(
         None, description="Get messages before this timestamp"
     ),
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """Get conversation history"""
     try:
@@ -509,7 +517,7 @@ async def get_conversation_history(
                 )
 
         # Get conversation history using service
-        result = await chat_service.get_conversation_history(
+        result = await service.get_conversation_history(
             repository_id=repository_id,
             session_id=session_id,
             limit=limit,

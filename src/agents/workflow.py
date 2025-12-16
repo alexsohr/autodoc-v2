@@ -15,14 +15,21 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from ..agents.document_agent import DocumentProcessingAgent, document_agent
-from ..agents.wiki_agent import WikiGenerationAgent, wiki_agent
 from ..models.repository import AnalysisStatus, Repository
-from ..repository.database import get_database
-from ..tools.context_tool import context_tool
-from ..tools.embedding_tool import embedding_tool
-from ..tools.llm_tool import llm_tool
-from ..tools.repository_tool import repository_tool
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..repository.repository_repository import RepositoryRepository
+from ..repository.wiki_structure_repository import WikiStructureRepository
+from ..tools.context_tool import ContextTool
+from ..tools.embedding_tool import EmbeddingTool
+from ..tools.llm_tool import LLMTool
+from ..tools.repository_tool import RepositoryTool
+
+# Import TYPE_CHECKING to avoid circular imports
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..agents.document_agent import DocumentProcessingAgent
+    from ..agents.wiki_agent import WikiGenerationAgent
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +68,48 @@ class WorkflowOrchestrator:
     document processing, wiki generation, and chat responses.
     """
 
-    def __init__(self):
-        """Initialize workflow orchestrator"""
+    def __init__(
+        self,
+        context_tool: ContextTool,
+        embedding_tool: EmbeddingTool,
+        llm_tool: LLMTool,
+        repository_tool: RepositoryTool,
+        repository_repo: RepositoryRepository,
+        code_document_repo: CodeDocumentRepository,
+        wiki_structure_repo: WikiStructureRepository,
+        document_agent: "DocumentProcessingAgent",
+        wiki_agent: "WikiGenerationAgent",
+    ):
+        """Initialize workflow orchestrator with dependency injection.
+        
+        Args:
+            context_tool: ContextTool instance (injected via DI).
+            embedding_tool: EmbeddingTool instance (injected via DI).
+            llm_tool: LLMTool instance (injected via DI).
+            repository_tool: RepositoryTool instance (injected via DI).
+            repository_repo: RepositoryRepository instance (injected via DI).
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+            wiki_structure_repo: WikiStructureRepository instance (injected via DI).
+            document_agent: DocumentProcessingAgent instance (injected via DI).
+            wiki_agent: WikiGenerationAgent instance (injected via DI).
+        """
         self.memory = MemorySaver()
+        
+        # Tool dependencies
+        self._context_tool = context_tool
+        self._embedding_tool = embedding_tool
+        self._llm_tool = llm_tool
+        self._repository_tool = repository_tool
+        
+        # Repository dependencies
+        self._repository_repo = repository_repo
+        self._code_document_repo = code_document_repo
+        self._wiki_structure_repo = wiki_structure_repo
+        
+        # Agent dependencies
+        self._document_agent = document_agent
+        self._wiki_agent = wiki_agent
+        
         self.workflows = self._create_workflows()
 
         # Workflow stage definitions
@@ -319,29 +365,26 @@ class WorkflowOrchestrator:
             state["progress"] = 5.0
 
             # Get repository from database
-            # Use database directly for generic operations
-            database = await get_database()
-            repository = await database["repositories"].find_one(
-                {"id": state["repository_id"]}
-            )
+            repo_repository = self._repository_repo
+            repository = await repo_repository.get(UUID(state["repository_id"]))
 
             if not repository:
                 state["error_message"] = "Repository not found"
                 return state
 
             # Check if repository is accessible
-            if not repository.get("url"):
+            if not repository.url:
                 state["error_message"] = "Repository URL not available"
                 return state
 
-            state["repository_url"] = repository["url"]
+            state["repository_url"] = repository.url
             state["stages_completed"].append("validate_repository")
             state["progress"] = 10.0
 
             # Add success message
             state["messages"].append(
                 AIMessage(
-                    content=f"Repository validated: {repository['org']}/{repository['name']}"
+                    content=f"Repository validated: {repository.org}/{repository.name}"
                 )
             )
 
@@ -359,9 +402,7 @@ class WorkflowOrchestrator:
 
             # Check if documents already processed (unless force update)
             if not state["force_update"]:
-                # Use database directly for generic operations
-                database = await get_database()
-                doc_count = await database["code_documents"].count_documents(
+                doc_count = await self._code_document_repo.count(
                     {"repository_id": state["repository_id"]}
                 )
 
@@ -379,7 +420,7 @@ class WorkflowOrchestrator:
                     return state
 
             # Process documents using document agent
-            processing_result = await document_agent.process_repository(
+            processing_result = await self._document_agent.process_repository(
                 repository_id=state["repository_id"],
                 repository_url=state["repository_url"],
                 branch=state["branch"],
@@ -416,9 +457,7 @@ class WorkflowOrchestrator:
 
             # Check if wiki already exists (unless force update)
             if not state["force_update"]:
-                # Use database directly for generic operations
-                database = await get_database()
-                existing_wiki = await database["wiki_structures"].find_one(
+                existing_wiki = await self._wiki_structure_repo.find_one(
                     {"repository_id": state["repository_id"]}
                 )
 
@@ -427,7 +466,7 @@ class WorkflowOrchestrator:
                     state["progress"] = 90.0
                     state["results"]["wiki_generation"] = {
                         "status": "exists",
-                        "wiki_id": existing_wiki.get("id"),
+                        "wiki_id": str(existing_wiki.id),
                     }
 
                     state["messages"].append(
@@ -437,7 +476,7 @@ class WorkflowOrchestrator:
                     return state
 
             # Generate wiki using wiki agent
-            wiki_result = await wiki_agent.generate_wiki(
+            wiki_result = await self._wiki_agent.generate_wiki(
                 repository_id=state["repository_id"],
                 force_regenerate=state["force_update"],
             )
@@ -536,7 +575,7 @@ class WorkflowOrchestrator:
                 return state
 
             # Retrieve relevant context
-            context_result = await context_tool._arun(
+            context_result = await self._context_tool._arun(
                 "hybrid_search",
                 query=question,
                 repository_id=state["repository_id"],
@@ -569,7 +608,7 @@ class WorkflowOrchestrator:
             context_documents = state["results"].get("context", [])
 
             # Generate answer using LLM tool
-            answer_result = await llm_tool._arun(
+            answer_result = await self._llm_tool._arun(
                 "answer_question",
                 question=question,
                 context_documents=context_documents,
@@ -683,8 +722,6 @@ class WorkflowOrchestrator:
             error_message: Optional error message
         """
         try:
-            # Use database directly for generic operations
-            database = await get_database()
 
             updates = {
                 "analysis_status": status.value,
@@ -697,7 +734,7 @@ class WorkflowOrchestrator:
             if error_message:
                 updates["error_message"] = error_message
 
-            await database["repositories"].update_one({"id": repository_id}, {"$set": updates})
+            await self._repository_repo.update(UUID(repository_id), updates)
 
         except Exception as e:
             logger.error(f"Failed to update repository status: {e}")
@@ -723,9 +760,7 @@ class WorkflowOrchestrator:
             # This would retrieve state from checkpointer if workflow is running
             # For now, return basic status
 
-            # Use database directly for generic operations
-            database = await get_database()
-            repository = await database["repositories"].find_one({"id": repository_id})
+            repository = await self._repository_repo.get(UUID(repository_id))
 
             if not repository:
                 return {
@@ -735,10 +770,11 @@ class WorkflowOrchestrator:
 
             # Determine status based on workflow type
             if workflow_type == WorkflowType.FULL_ANALYSIS:
-                doc_count = await database["code_documents"].count_documents(
+
+                doc_count = await self._code_document_repo.count(
                     {"repository_id": repository_id}
                 )
-                wiki_exists = await database["wiki_structures"].find_one(
+                wiki_exists = await self._wiki_structure_repo.find_one(
                     {"repository_id": repository_id}
                 )
 
@@ -750,13 +786,13 @@ class WorkflowOrchestrator:
                     status = "not_started"
 
             elif workflow_type == WorkflowType.DOCUMENT_PROCESSING:
-                doc_count = await database["code_documents"].count_documents(
+                doc_count = await self._code_document_repo.count(
                     {"repository_id": repository_id}
                 )
                 status = "completed" if doc_count > 0 else "not_started"
 
             elif workflow_type == WorkflowType.WIKI_GENERATION:
-                wiki_exists = await database["wiki_structures"].find_one(
+                wiki_exists = await self._wiki_structure_repo.find_one(
                     {"repository_id": repository_id}
                 )
                 status = "completed" if wiki_exists else "not_started"
@@ -768,8 +804,8 @@ class WorkflowOrchestrator:
                 "status": status,
                 "workflow_type": workflow_type.value,
                 "repository_id": repository_id,
-                "analysis_status": repository.get("analysis_status", "unknown"),
-                "last_analyzed": repository.get("last_analyzed"),
+                "analysis_status": repository.analysis_status.value if repository.analysis_status else "unknown",
+                "last_analyzed": repository.last_analyzed,
             }
 
         except Exception as e:
@@ -821,7 +857,3 @@ class WorkflowOrchestrator:
         }
 
         return descriptions.get(workflow_type, "Unknown workflow")
-
-
-# Global orchestrator instance
-workflow_orchestrator = WorkflowOrchestrator()

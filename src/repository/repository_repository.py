@@ -55,3 +55,31 @@ class RepositoryRepository(BaseRepository[Repository]):
         )
         total = await self.count(query)
         return documents, total
+
+    async def get_statistics(self) -> Dict[str, Any]:
+        """Get repository statistics including counts by status and provider.
+
+        Returns:
+            Dictionary with statistics including total count, status breakdown,
+            provider breakdown, and recent repositories
+        """
+        from ..models.repository import AnalysisStatus, RepositoryProvider
+
+        total = await self.count({})
+
+        status_counts = {}
+        for status in AnalysisStatus:
+            status_counts[status.value] = await self.count({"analysis_status": status.value})
+
+        provider_counts = {}
+        for provider in RepositoryProvider:
+            provider_counts[provider.value] = await self.count({"provider": provider.value})
+
+        recent = await self.find_many({}, limit=5, sort=[("updated_at", DESCENDING)])
+
+        return {
+            "total": total,
+            "by_status": status_counts,
+            "by_provider": provider_counts,
+            "recent": recent
+        }

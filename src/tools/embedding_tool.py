@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from ..models.code_document import CodeDocument
 from ..models.config import LLMProvider
-from ..repository.database import get_database
+from ..repository.code_document_repository import CodeDocumentRepository
 from ..utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,12 @@ class EmbeddingTool(BaseTool):
     name: str = "embedding_tool"
     description: str = "Tool for generating, storing, and searching vector embeddings"
 
-    def __init__(self):
+    def __init__(self, code_document_repo: CodeDocumentRepository):
+        """Initialize EmbeddingTool with dependency injection.
+        
+        Args:
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+        """
         super().__init__()
         # Initialize settings and configuration
         settings = get_settings()
@@ -77,6 +82,9 @@ class EmbeddingTool(BaseTool):
         # Initialize embedding providers
         self._embedding_providers = {}
         self._setup_embedding_providers(settings)
+
+        # Repository injected via DI
+        self._code_document_repo = code_document_repo
 
     def _setup_embedding_providers(self, settings) -> None:
         """Setup embedding providers based on configuration"""
@@ -216,17 +224,12 @@ class EmbeddingTool(BaseTool):
             Dictionary with storage results
         """
         try:
-            # Get MongoDB adapter
-            # Use database directly for generic operations
-            database = await get_database()
-
             # Store embedding
-            await dal.store_document_embedding(document_id, embedding)
+            await self._code_document_repo.store_embedding(document_id, embedding)
 
             # Store additional metadata if provided
             if metadata:
-                await dal.update_document(
-                    "code_documents",
+                await self._code_document_repo.update_one(
                     {"id": document_id},
                     {"embedding_metadata": metadata},
                 )
@@ -268,16 +271,12 @@ class EmbeddingTool(BaseTool):
             Dictionary with search results
         """
         try:
-            # Get MongoDB adapter
-            # Use database directly for generic operations
-            database = await get_database()
-
-            # Perform vector search
             from uuid import UUID
 
+            # Perform vector search
             repo_uuid = UUID(repository_id) if repository_id else None
 
-            results = await dal.vector_search(
+            results = await self._code_document_repo.vector_search(
                 query_embedding=query_embedding,
                 repository_id=repo_uuid,
                 language_filter=language_filter,
@@ -580,17 +579,13 @@ class EmbeddingTool(BaseTool):
             Dictionary with reprocessing results
         """
         try:
-            # Get MongoDB adapter
-            # Use database directly for generic operations
-            database = await get_database()
-
             # Find all documents for repository
             query = {"repository_id": repository_id}
             if not force:
                 # Only process documents without embeddings
                 query["embedding"] = {"$exists": False}
 
-            documents = await dal.find_documents("code_documents", query)
+            documents = await self._code_document_repo.find_many(query)
 
             if not documents:
                 return {
@@ -604,10 +599,13 @@ class EmbeddingTool(BaseTool):
             code_documents = []
             for doc in documents:
                 try:
-                    from uuid import UUID
+                    if isinstance(doc, CodeDocument):
+                        code_documents.append(doc)
+                    else:
+                        from uuid import UUID
 
-                    doc["repository_id"] = UUID(doc["repository_id"])
-                    code_documents.append(CodeDocument(**doc))
+                        doc["repository_id"] = UUID(doc["repository_id"])
+                        code_documents.append(CodeDocument(**doc))
                 except Exception as e:
                     logger.warning(f"Could not convert document {doc.get('id')}: {e}")
 
@@ -642,25 +640,20 @@ class EmbeddingTool(BaseTool):
             Dictionary with embedding statistics
         """
         try:
-            # Use database directly for generic operations
-            database = await get_database()
-
             # Build query
             query = {}
             if repository_id:
                 query["repository_id"] = repository_id
 
             # Count total documents
-            total_docs = await dal.count_documents("code_documents", query)
+            total_docs = await self._code_document_repo.count(query)
 
             # Count documents with embeddings
             query_with_embedding = {
                 **query,
                 "embedding": {"$exists": True, "$ne": None},
             }
-            docs_with_embeddings = await dal.count_documents(
-                "code_documents", query_with_embedding
-            )
+            docs_with_embeddings = await self._code_document_repo.count(query_with_embedding)
 
             # Get language breakdown
             pipeline = [
@@ -675,9 +668,7 @@ class EmbeddingTool(BaseTool):
             ]
 
             language_stats = {}
-            # Database already available from import
-            collection = database["code_documents"]
-            async for doc in collection.aggregate(pipeline):
+            async for doc in code_document_repo.collection.aggregate(pipeline):
                 language_stats[doc["_id"]] = {
                     "count": doc["count"],
                     "avg_dimension": int(doc.get("avg_embedding_size", 0)),
@@ -736,4 +727,6 @@ class EmbeddingTool(BaseTool):
 
 
 # Tool instance for LangGraph
-embedding_tool = EmbeddingTool()
+# Deprecated: Module-level singleton removed
+# Use get_embedding_tool() from src.dependencies with FastAPI's Depends() instead
+# embedding_tool = EmbeddingTool()  # REMOVED - use dependency injection

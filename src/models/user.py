@@ -47,7 +47,7 @@ class User(BaseModel):
     full_name: Optional[str] = Field(default=None, description="Full name")
     is_active: bool = Field(default=True, description="User is active")
     is_admin: bool = Field(default=False, description="User has admin privileges")
-    created_at: datetime = Field(description="Creation timestamp")
+    created_at: Optional[datetime] = Field(default=None, description="Creation timestamp")
     last_login: Optional[datetime] = Field(
         default=None, description="Last login timestamp"
     )

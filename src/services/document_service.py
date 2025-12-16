@@ -12,15 +12,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from ..agents.document_agent import document_agent
+from ..agents.document_agent import DocumentProcessingAgent
 from ..models.code_document import (
     CodeDocument,
     CodeDocumentCreate,
     CodeDocumentResponse,
 )
-from ..repository.database import get_database
-from ..tools.context_tool import context_tool
-from ..tools.embedding_tool import embedding_tool
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..tools.context_tool import ContextTool
+from ..tools.embedding_tool import EmbeddingTool
 from ..utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -33,23 +33,29 @@ class DocumentProcessingService:
     content cleaning, embedding generation, and semantic search.
     """
 
-    def __init__(self, code_document_repo=None):
-        """Initialize document processing service with repository dependency injection"""
+    def __init__(
+        self,
+        code_document_repo: CodeDocumentRepository,
+        document_agent: DocumentProcessingAgent,
+        context_tool: ContextTool,
+        embedding_tool: EmbeddingTool,
+    ):
+        """Initialize document processing service with dependency injection.
+        
+        Args:
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+            document_agent: DocumentProcessingAgent instance (injected via DI).
+            context_tool: ContextTool instance (injected via DI).
+            embedding_tool: EmbeddingTool instance (injected via DI).
+        """
         self.settings = get_settings()
         self.max_file_size = self.settings.max_file_size_mb * 1024 * 1024
         self.supported_languages = set(self.settings.supported_languages)
         self.batch_size = self.settings.embedding_batch_size
-        # Repository will be injected or lazily loaded
         self._code_document_repo = code_document_repo
-
-    async def _get_code_document_repo(self):
-        """Get code document repository instance (lazy loading)"""
-        if self._code_document_repo is None:
-            from ..repository.code_document_repository import CodeDocumentRepository
-            from ..models.code_document import CodeDocument
-            
-            self._code_document_repo = CodeDocumentRepository(CodeDocument)
-        return self._code_document_repo
+        self._document_agent = document_agent
+        self._context_tool = context_tool
+        self._embedding_tool = embedding_tool
 
     async def process_repository_documents(
         self,
@@ -72,8 +78,7 @@ class DocumentProcessingService:
         try:
             # Check if already processed
             if not force_reprocess:
-                code_document_repo = await self._get_code_document_repo()
-                existing_docs = await code_document_repo.count(
+                existing_docs = await self._code_document_repo.count(
                     {"repository_id": str(repository_id)}
                 )
 
@@ -86,7 +91,7 @@ class DocumentProcessingService:
                     }
 
             # Process repository using document agent
-            processing_result = await document_agent.process_repository(
+            processing_result = await self._document_agent.process_repository(
                 repository_id=str(repository_id),
                 repository_url=repository_url,
                 branch=branch,
@@ -134,21 +139,19 @@ class DocumentProcessingService:
             Dictionary with document list and metadata
         """
         try:
-            code_document_repo = await self._get_code_document_repo()
-
             # Build query filter
             query_filter = {"repository_id": str(repository_id)}
             if language_filter:
                 query_filter["language"] = language_filter
 
             # Get documents
-            documents_data = await code_document_repo.find_many(
+            documents_data = await self._code_document_repo.find_many(
                 query_filter,
                 limit=limit,
                 offset=offset,
                 sort=[("file_path", 1)],
             )
-            documents_data = code_document_repo.serialize_many(documents_data)
+            documents_data = self._code_document_repo.serialize_many(documents_data)
 
             # Apply path pattern filter if specified
             if path_pattern:
@@ -173,7 +176,7 @@ class DocumentProcessingService:
             )
 
             # Get total count
-            total_count = await code_document_repo.count(query_filter)
+            total_count = await self._code_document_repo.count(query_filter)
 
             return {
                 "status": "success",
@@ -216,7 +219,7 @@ class DocumentProcessingService:
         """
         try:
             # Perform search using context tool
-            search_result = await context_tool._arun(
+            search_result = await self._context_tool._arun(
                 "search",
                 query=query,
                 repository_id=str(repository_id) if repository_id else None,
@@ -270,9 +273,8 @@ class DocumentProcessingService:
             Dictionary with document content
         """
         try:
-            code_document_repo = await self._get_code_document_repo()
-            doc = await code_document_repo.find_one({"id": document_id})
-            doc_data = code_document_repo.serialize(doc) if doc else None
+            doc = await self._code_document_repo.find_one({"id": document_id})
+            doc_data = self._code_document_repo.serialize(doc) if doc else None
 
             if not doc_data:
                 return {
@@ -318,11 +320,9 @@ class DocumentProcessingService:
             Dictionary with update result
         """
         try:
-            code_document_repo = await self._get_code_document_repo()
-
             # Get existing document
-            doc = await code_document_repo.find_one({"id": document_id})
-            doc_data = code_document_repo.serialize(doc) if doc else None
+            doc = await self._code_document_repo.find_one({"id": document_id})
+            doc_data = self._code_document_repo.serialize(doc) if doc else None
             if not doc_data:
                 return {
                     "status": "error",
@@ -346,7 +346,7 @@ class DocumentProcessingService:
             if regenerate_embedding:
                 updates["embedding"] = None
 
-            success = await code_document_repo.update_one(
+            success = await self._code_document_repo.update_one(
                 {"id": document_id}, updates
             )
 
@@ -360,7 +360,7 @@ class DocumentProcessingService:
             # Regenerate embedding if requested
             embedding_result = None
             if regenerate_embedding:
-                embedding_result = await embedding_tool._arun(
+                embedding_result = await self._embedding_tool._arun(
                     "generate_and_store",
                     documents=[
                         {"id": document_id, "processed_content": processed_content}
@@ -395,11 +395,9 @@ class DocumentProcessingService:
             Dictionary with deletion result
         """
         try:
-            code_document_repo = await self._get_code_document_repo()
-
             # Check if document exists
-            doc = await code_document_repo.find_one({"id": document_id})
-            doc_data = code_document_repo.serialize(doc) if doc else None
+            doc = await self._code_document_repo.find_one({"id": document_id})
+            doc_data = self._code_document_repo.serialize(doc) if doc else None
             if not doc_data:
                 return {
                     "status": "error",
@@ -408,7 +406,7 @@ class DocumentProcessingService:
                 }
 
             # Delete document
-            success = await code_document_repo.delete_one({"id": document_id})
+            success = await self._code_document_repo.delete_one({"id": document_id})
 
             if success:
                 return {
@@ -449,7 +447,7 @@ class DocumentProcessingService:
         """
         try:
             # Use embedding tool to reprocess embeddings
-            reprocess_result = await embedding_tool._arun(
+            reprocess_result = await self._embedding_tool._arun(
                 "reprocess_embeddings", repository_id=str(repository_id), force=force
             )
 
@@ -485,7 +483,7 @@ class DocumentProcessingService:
         """
         try:
             # Use embedding tool to get statistics
-            stats_result = await embedding_tool._arun(
+            stats_result = await self._embedding_tool._arun(
                 "get_embedding_stats",
                 repository_id=str(repository_id) if repository_id else None,
             )
@@ -506,13 +504,11 @@ class DocumentProcessingService:
             Dictionary with quality analysis
         """
         try:
-            code_document_repo = await self._get_code_document_repo()
-
             # Get all documents for repository
-            documents = await code_document_repo.find_many(
+            documents = await self._code_document_repo.find_many(
                 {"repository_id": str(repository_id)}, limit=1000
             )
-            documents_data = code_document_repo.serialize_many(documents)
+            documents_data = self._code_document_repo.serialize_many(documents)
 
             if not documents_data:
                 return {
@@ -606,8 +602,6 @@ class DocumentProcessingService:
             Dictionary with processing results
         """
         try:
-            code_document_repo = await self._get_code_document_repo()
-
             processed_files = 0
             added_files = 0
             modified_files = 0
@@ -672,26 +666,7 @@ class DocumentProcessingService:
             Dictionary mapping language to count
         """
         try:
-            # Get database for aggregation
-            database = await get_database()
-
-            # Aggregate by language
-            pipeline = [
-                {"$match": base_query},
-                {"$group": {"_id": "$language", "count": {"$sum": 1}}},
-                {"$sort": {"count": -1}},
-            ]
-
-            language_stats = {}
-            from ..repository.database import get_database
-
-            # Database already available from get_database import
-            collection = database["code_documents"]
-            async for doc in collection.aggregate(pipeline):
-                language_stats[doc["_id"]] = doc["count"]
-
-            return language_stats
-
+            return await self._code_document_repo.get_language_statistics(base_query)
         except Exception as e:
             logger.error(f"Language statistics failed: {e}")
             return {}
@@ -886,8 +861,7 @@ class DocumentProcessingService:
             file_path: Path of removed file
         """
         try:
-            code_document_repo = await self._get_code_document_repo()
-            await code_document_repo.delete_one(
+            await self._code_document_repo.delete_one(
                 {"repository_id": str(repository_id), "file_path": file_path}
             )
         except Exception as e:
@@ -895,4 +869,7 @@ class DocumentProcessingService:
 
 
 # Global document processing service instance
-document_service = DocumentProcessingService()
+# Deprecated: Module-level singleton removed
+# Use get_document_service() from src.dependencies with FastAPI's Depends() instead
+# from ..dependencies import get_document_service
+# document_service = get_document_service()  # REMOVED - use dependency injection

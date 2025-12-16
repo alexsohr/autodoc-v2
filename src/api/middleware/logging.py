@@ -10,13 +10,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from src.dependencies import get_auth_service
 import structlog
-from fastapi import Depends, Request, Response
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ...models.user import User
-from ...services.auth_service import auth_service
+from ...services.auth_service import AuthenticationService
 from ...utils.config_loader import get_settings
 
 # Security scheme for JWT tokens
@@ -320,6 +321,7 @@ async def get_authenticated_user(
         )
 
     # Get user from auth service
+    auth_service = get_auth_service()
     user = await auth_service.get_current_user(credentials.credentials)
     if not user:
         raise HTTPException(
@@ -381,6 +383,7 @@ def require_permissions(required_scopes: List[str]):
         Raises:
             HTTPException: If user lacks required permissions
         """
+        auth_service = get_auth_service()
         if not auth_service.check_permissions(current_user, required_scopes):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

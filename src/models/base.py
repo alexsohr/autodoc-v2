@@ -49,10 +49,10 @@ class BaseSerializers(_SerializerMixin, BaseModel):
 
 
 class BaseDocument(_SerializerMixin, Document):
-    """Base Beanie document with shared serializers and BSON encoders."""
+    """Base Beanie document with shared serializers."""
 
     class Settings:
-        bson_encoders = {UUID: str}
+        pass
 
     def __init__(self, **data: Any) -> None:
         # Allow instantiation before init_beanie during unit tests

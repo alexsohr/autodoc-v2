@@ -26,10 +26,14 @@ class AuthenticationService:
     login, JWT token management, and authorization checks.
     """
 
-    def __init__(self):
-        """Initialize authentication service"""
+    def __init__(self, user_repository: UserRepository):
+        """Initialize authentication service with dependency injection.
+        
+        Args:
+            user_repository: UserRepository instance (injected via DI).
+        """
         self.settings = get_settings()
-        self.user_repository = UserRepository()
+        self.user_repository = user_repository
 
         # Password hashing context
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -657,5 +661,6 @@ class AuthenticationService:
             }
 
 
-# Global authentication service instance
-auth_service = AuthenticationService()
+# Deprecated: Use get_auth_service() from src.dependencies instead
+# This singleton is kept for backward compatibility only
+# auth_service = AuthenticationService()  # REMOVED - use dependency injection

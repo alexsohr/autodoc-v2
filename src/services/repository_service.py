@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from ..agents.workflow import WorkflowType, workflow_orchestrator
+from ..agents.workflow import WorkflowOrchestrator, WorkflowType
 from ..models.repository import (
     AccessScope,
     AnalysisStatus,
@@ -21,7 +21,8 @@ from ..models.repository import (
     RepositoryProvider,
     RepositoryUpdate,
 )
-from ..repository.database import get_database
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..repository.repository_repository import RepositoryRepository
 from ..utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -34,25 +35,22 @@ class RepositoryService:
     webhook configuration, and status tracking.
     """
 
-    def __init__(self, repository_repo=None):
-        """Initialize repository service with repository dependency injection"""
+    def __init__(
+        self,
+        repository_repo: RepositoryRepository,
+        code_document_repo: CodeDocumentRepository,
+        workflow_orchestrator: Optional[WorkflowOrchestrator] = None,
+    ):
+        """Initialize repository service with repository dependency injection."""
         self.settings = get_settings()
         self.supported_providers = {
             "github.com": RepositoryProvider.GITHUB,
             "bitbucket.org": RepositoryProvider.BITBUCKET,
             "gitlab.com": RepositoryProvider.GITLAB,
         }
-        # Repository will be injected or lazily loaded
         self._repository_repo = repository_repo
-
-    async def _get_repository_repo(self):
-        """Get repository repository instance (lazy loading)"""
-        if self._repository_repo is None:
-            from ..repository.repository_repository import RepositoryRepository
-            from ..models.repository import Repository
-            
-            self._repository_repo = RepositoryRepository(Repository)
-        return self._repository_repo
+        self._code_document_repo = code_document_repo
+        self._workflow_orchestrator = workflow_orchestrator
 
     async def create_repository(
         self, repository_data: RepositoryCreate
@@ -96,8 +94,7 @@ class RepositoryService:
                 }
 
             # Check if repository already exists
-            repo_repository = await self._get_repository_repo()
-            existing_repo = await repo_repository.get_by_url(repository_data.url)
+            existing_repo = await self._repository_repo.get_by_url(repository_data.url)
             if existing_repo:
                 return {
                     "status": "error",
@@ -120,7 +117,7 @@ class RepositoryService:
             )
 
             # Store in database using repository pattern
-            created_repo = await repo_repository.create(repository)
+            created_repo = await self._repository_repo.create(repository)
 
             # Start analysis workflow (async)
             asyncio.create_task(
@@ -149,8 +146,7 @@ class RepositoryService:
             Dictionary with repository data or error
         """
         try:
-            repo_repository = await self._get_repository_repo()
-            repository = await repo_repository.get(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             if repository:
                 return {"status": "success", "repository": repository.model_dump()}
@@ -184,10 +180,8 @@ class RepositoryService:
             Dictionary with repository list and metadata
         """
         try:
-            repo_repository = await self._get_repository_repo()
-
             # Get repositories using repository pattern
-            repositories, total_count = await repo_repository.list_paginated(
+            repositories, total_count = await self._repository_repo.list_paginated(
                 limit=limit, offset=offset, status_filter=status_filter
             )
 
@@ -235,12 +229,11 @@ class RepositoryService:
                 }
 
             # Update repository using repository pattern
-            repo_repository = await self._get_repository_repo()
-            success = await repo_repository.update(repository_id, update_dict)
+            success = await self._repository_repo.update(repository_id, update_dict)
 
             if success:
                 # Get updated repository
-                updated_repo = await repo_repository.get(repository_id)
+                updated_repo = await self._repository_repo.get(repository_id)
                 return {
                     "status": "success",
                     "repository": updated_repo.model_dump() if updated_repo else None,
@@ -267,10 +260,8 @@ class RepositoryService:
             Dictionary with deletion result
         """
         try:
-            repo_repository = await self._get_repository_repo()
-
             # Check if repository exists
-            repository = await repo_repository.get(repository_id)
+            repository = await self._repository_repo.get(repository_id)
             if not repository:
                 return {
                     "status": "error",
@@ -279,7 +270,7 @@ class RepositoryService:
                 }
 
             # Delete repository and all related data
-            success = await repo_repository.delete(repository_id)
+            success = await self._repository_repo.delete(repository_id)
 
             if success:
                 return {
@@ -311,8 +302,7 @@ class RepositoryService:
             Dictionary with analysis trigger result
         """
         try:
-            repo_repository = await self._get_repository_repo()
-            repository = await repo_repository.get(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             if not repository:
                 return {
@@ -343,7 +333,7 @@ class RepositoryService:
                 }
 
             # Update status to processing
-            await repo_repository.update(
+            await self._repository_repo.update(
                 repository_id,
                 {
                     "analysis_status": AnalysisStatus.PROCESSING.value,
@@ -352,7 +342,7 @@ class RepositoryService:
             )
 
             # Start analysis workflow
-            workflow_result = await workflow_orchestrator.execute_workflow(
+            workflow_result = await self._workflow_orchestrator.execute_workflow(
                 workflow_type=WorkflowType.FULL_ANALYSIS,
                 repository_id=str(repository_id),
                 repository_url=repository.url,
@@ -373,8 +363,7 @@ class RepositoryService:
 
             # Reset status on error
             try:
-                repo_repository = await self._get_repository_repo()
-                await repo_repository.update(
+                await self._repository_repo.update(
                     repository_id,
                     {
                         "analysis_status": AnalysisStatus.FAILED.value,
@@ -396,8 +385,7 @@ class RepositoryService:
             Dictionary with analysis status
         """
         try:
-            repo_repository = await self._get_repository_repo()
-            repository = await repo_repository.get(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             if not repository:
                 return {
@@ -406,26 +394,15 @@ class RepositoryService:
                     "error_type": "NotFound",
                 }
 
-            # Get document counts using database directly
-            database = await get_database()
-            code_documents_collection = database["code_documents"]
-
-            # Get document count
-            doc_count = await code_documents_collection.count_documents(
-                {"repository_id": str(repository_id)}
-            )
-
-            # Get embedding count
-            embedding_count = await code_documents_collection.count_documents(
+            doc_count = await self._code_document_repo.count({"repository_id": str(repository_id)})
+            embedding_count = await self._code_document_repo.count(
                 {"repository_id": str(repository_id), "embedding": {"$exists": True}}
             )
 
-            # Calculate progress
             progress = 0.0
             if repository.analysis_status == AnalysisStatus.COMPLETED:
                 progress = 100.0
             elif repository.analysis_status == AnalysisStatus.PROCESSING:
-                # Estimate progress based on documents processed
                 if doc_count > 0:
                     progress = min(90.0, (embedding_count / doc_count) * 80.0 + 10.0)
                 else:
@@ -488,7 +465,7 @@ class RepositoryService:
                     "error_type": "InvalidEvents",
                 }
 
-            # Update repository webhook configuration (already have repo_repository)
+            # Update repository webhook configuration
             updates = {
                 "webhook_configured": True,
                 "webhook_secret": webhook_secret,
@@ -496,8 +473,7 @@ class RepositoryService:
                 "updated_at": datetime.now(timezone.utc),
             }
 
-            repo_repository = await self._get_repository_repo()
-            success = await repo_repository.update(repository_id, updates)
+            success = await self._repository_repo.update(repository_id, updates)
 
             if not success:
                 return {
@@ -507,7 +483,7 @@ class RepositoryService:
                 }
 
             # Get updated repository for response
-            repository = await repo_repository.get(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             # Generate setup instructions
             setup_instructions = self._generate_webhook_setup_instructions(repository)
@@ -535,8 +511,7 @@ class RepositoryService:
             Dictionary with webhook configuration
         """
         try:
-            repo_repository = await self._get_repository_repo()
-            repository = await repo_repository.get(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             if not repository:
                 return {
@@ -572,8 +547,7 @@ class RepositoryService:
             Repository object or None
         """
         try:
-            repo_repository = await self._get_repository_repo()
-            return await repo_repository.get_by_url(repository_url)
+            return await self._repository_repo.get_by_url(repository_url)
         except Exception as e:
             logger.error(f"Find repository by URL failed: {e}")
             return None
@@ -635,13 +609,12 @@ class RepositoryService:
                 }
 
             # Update webhook event timestamp
-            repo_repository = await self._get_repository_repo()
-            await repo_repository.update(
+            await self._repository_repo.update(
                 repository.id, {"last_webhook_event": datetime.now(timezone.utc)}
             )
 
             # Trigger incremental analysis
-            workflow_result = await workflow_orchestrator.execute_workflow(
+            workflow_result = await self._workflow_orchestrator.execute_workflow(
                 workflow_type=WorkflowType.INCREMENTAL_UPDATE,
                 repository_id=str(repository.id),
                 repository_url=repository.url,
@@ -880,7 +853,7 @@ class RepositoryService:
             branch: Branch to analyze
         """
         try:
-            await workflow_orchestrator.execute_workflow(
+            await self._workflow_orchestrator.execute_workflow(
                 workflow_type=WorkflowType.FULL_ANALYSIS,
                 repository_id=repository_id,
                 repository_url=repository_url,
@@ -896,53 +869,27 @@ class RepositoryService:
             Dictionary with repository statistics
         """
         try:
-            # Use database directly for statistics
-            database = await get_database()
-            repositories_collection = database["repositories"]
+            stats = await self._repository_repo.get_statistics()
 
-            # Get total repositories
-            total_repos = await repositories_collection.count_documents({})
-
-            # Get repositories by status
-            status_counts = {}
-            for status in AnalysisStatus:
-                count = await repositories_collection.count_documents(
-                    {"analysis_status": status.value}
-                )
-                status_counts[status.value] = count
-
-            # Get repositories by provider
-            provider_counts = {}
-            for provider in RepositoryProvider:
-                count = await repositories_collection.count_documents(
-                    {"provider": provider.value}
-                )
-                provider_counts[provider.value] = count
-
-            # Get recent activity
-            recent_repos_cursor = repositories_collection.find({}).sort("updated_at", -1).limit(5)
-            recent_repos = await recent_repos_cursor.to_list(length=5)
+            recent_activity = [
+                {
+                    "id": repo.id,
+                    "name": f"{repo.org}/{repo.name}",
+                    "status": repo.analysis_status,
+                    "updated_at": repo.updated_at,
+                }
+                for repo in stats["recent"]
+            ]
 
             return {
                 "status": "success",
-                "total_repositories": total_repos,
-                "status_breakdown": status_counts,
-                "provider_breakdown": provider_counts,
-                "recent_activity": [
-                    {
-                        "id": repo["id"],
-                        "name": f"{repo['org']}/{repo['name']}",
-                        "status": repo["analysis_status"],
-                        "updated_at": repo["updated_at"],
-                    }
-                    for repo in recent_repos
-                ],
+                "total_repositories": stats["total"],
+                "status_breakdown": stats["by_status"],
+                "provider_breakdown": stats["by_provider"],
+                "recent_activity": recent_activity,
             }
 
         except Exception as e:
             logger.error(f"Get repository statistics failed: {e}")
             return {"status": "error", "error": str(e), "error_type": type(e).__name__}
 
-
-# Global repository service instance
-repository_service = RepositoryService()

@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
+from ...dependencies import get_repository_service
 from ...models.config import LLMConfig, StorageConfig
 from ...models.repository import (
     AnalysisStatus,
@@ -22,8 +23,7 @@ from ...models.repository import (
     RepositoryUpdate,
 )
 from ...models.user import User
-from ...services.auth_service import auth_service
-from ...services.repository_service import repository_service
+from ...services.repository_service import RepositoryService
 from ...utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -112,12 +112,14 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
     },
 )
 async def create_repository(
-    repository_data: RepositoryCreate, current_user: User = Depends(get_current_user)
+    repository_data: RepositoryCreate,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Register and analyze a repository"""
     try:
         # Create repository using service
-        result = await repository_service.create_repository(repository_data)
+        result = await service.create_repository(repository_data)
 
         if result["status"] != "success":
             error_type = result.get("error_type", "UnknownError")
@@ -223,11 +225,12 @@ async def list_repositories(
         None, description="Filter by repository provider"
     ),
     current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """List repositories with pagination and filtering"""
     try:
         # Get repositories using service
-        result = await repository_service.list_repositories(
+        result = await service.list_repositories(
             limit=limit,
             offset=offset,
             status_filter=status.value if status else None,
@@ -313,12 +316,14 @@ async def list_repositories(
     },
 )
 async def get_repository(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Get repository details"""
     try:
         # Get repository using service
-        result = await repository_service.get_repository(repository_id)
+        result = await service.get_repository(repository_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -360,7 +365,9 @@ async def get_repository(
 
 @router.delete("/{repository_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_repository(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Remove repository and all associated data"""
     try:
@@ -375,7 +382,7 @@ async def delete_repository(
             )
 
         # Delete repository using service
-        result = await repository_service.delete_repository(repository_id)
+        result = await service.delete_repository(repository_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -462,6 +469,7 @@ async def trigger_repository_analysis(
     repository_id: UUID,
     analysis_request: Optional[dict] = None,
     current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Trigger repository analysis"""
     try:
@@ -474,7 +482,7 @@ async def trigger_repository_analysis(
             branch = analysis_request.get("branch")
 
         # Trigger analysis using service
-        result = await repository_service.trigger_analysis(
+        result = await service.trigger_analysis(
             repository_id=repository_id, force=force, branch=branch
         )
 
@@ -589,12 +597,14 @@ async def trigger_repository_analysis(
     },
 )
 async def get_analysis_status(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Get analysis status for repository"""
     try:
         # Get analysis status using service
-        result = await repository_service.get_analysis_status(repository_id)
+        result = await service.get_analysis_status(repository_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -644,6 +654,7 @@ async def configure_repository_webhook(
     repository_id: UUID,
     webhook_config: dict,
     current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Configure repository webhook settings"""
     try:
@@ -661,7 +672,7 @@ async def configure_repository_webhook(
             )
 
         # Configure webhook using service
-        result = await repository_service.configure_webhook(
+        result = await service.configure_webhook(
             repository_id=repository_id,
             webhook_secret=webhook_secret,
             subscribed_events=subscribed_events,
@@ -717,12 +728,14 @@ async def configure_repository_webhook(
 
 @router.get("/{repository_id}/webhook")
 async def get_repository_webhook_config(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Get repository webhook configuration and setup instructions"""
     try:
         # Get webhook config using service
-        result = await repository_service.get_webhook_config(repository_id)
+        result = await service.get_webhook_config(repository_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
