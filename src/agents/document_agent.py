@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from ..models.code_document import CodeDocument, CodeDocumentCreate
@@ -72,7 +72,7 @@ class DocumentProcessingAgent:
         workflow.add_node("handle_error", self._handle_error_node)
 
         # Define workflow edges
-        workflow.set_entry_point("clone_repository")
+        workflow.add_edge(START, "clone_repository")
 
         # Sequential processing flow
         workflow.add_edge("clone_repository", "discover_files")
