@@ -13,7 +13,7 @@ from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, StateGraph
 
 from ..agents.document_agent import DocumentProcessingAgent, document_agent
 from ..agents.wiki_agent import WikiGenerationAgent, wiki_agent
@@ -140,7 +140,7 @@ class WorkflowOrchestrator:
         workflow.add_node("handle_error", self._handle_error_node)
 
         # Define edges
-        workflow.set_entry_point("validate_repository")
+        workflow.add_edge(START, "validate_repository")
         workflow.add_edge("validate_repository", "process_documents")
         workflow.add_edge("process_documents", "generate_wiki")
         workflow.add_edge("generate_wiki", "finalize")
@@ -160,7 +160,7 @@ class WorkflowOrchestrator:
         workflow.add_node("finalize", self._finalize_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        workflow.set_entry_point("validate_repository")
+        workflow.add_edge(START, "validate_repository")
         workflow.add_edge("validate_repository", "process_documents")
         workflow.add_edge("process_documents", "finalize")
         workflow.add_edge("finalize", END)
@@ -181,7 +181,7 @@ class WorkflowOrchestrator:
         workflow.add_node("finalize", self._finalize_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        workflow.set_entry_point("validate_repository")
+        workflow.add_edge(START, "validate_repository")
         workflow.add_edge("validate_repository", "generate_wiki")
         workflow.add_edge("generate_wiki", "finalize")
         workflow.add_edge("finalize", END)
@@ -203,7 +203,7 @@ class WorkflowOrchestrator:
         workflow.add_node("finalize", self._finalize_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        workflow.set_entry_point("detect_changes")
+        workflow.add_edge(START, "detect_changes")
         workflow.add_edge("detect_changes", "process_changed_documents")
         workflow.add_edge("process_changed_documents", "update_wiki")
         workflow.add_edge("update_wiki", "finalize")
@@ -223,7 +223,7 @@ class WorkflowOrchestrator:
         workflow.add_node("finalize", self._finalize_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        workflow.set_entry_point("retrieve_context")
+        workflow.add_edge(START, "retrieve_context")
         workflow.add_edge("retrieve_context", "generate_response")
         workflow.add_edge("generate_response", "finalize")
         workflow.add_edge("finalize", END)
