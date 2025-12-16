@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from ..models.repository import Repository
@@ -114,7 +114,7 @@ class WikiGenerationAgent:
         workflow.add_node("handle_error", self._handle_error_node)
 
         # Define workflow edges
-        workflow.set_entry_point("analyze_repository")
+        workflow.add_edge(START, "analyze_repository")
 
         # Sequential processing flow
         workflow.add_edge("analyze_repository", "generate_structure")
