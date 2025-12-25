@@ -162,6 +162,54 @@ class Settings(BaseSettings):
         description="Supported programming languages",
     )
 
+    # Document agent file filtering settings
+    default_excluded_dirs: List[str] = Field(
+        default=[
+            ".venv/", "venv/", "env/", "virtualenv/",
+            "node_modules/", "bower_components/", "jspm_packages/",
+            ".git/", ".svn/", ".hg/", ".bzr/",
+            ".idea/", ".vscode/", ".vscode-server/", ".vscode-server-insiders/",
+            ".pytest_cache/", ".pytest/", ".next/",
+        ],
+        description="Default directories to exclude from file tree",
+    )
+    default_excluded_files: List[str] = Field(
+        default=[
+            # Lock files
+            "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "poetry.lock",
+            "Pipfile.lock", "requirements.txt.lock", "Cargo.lock", "composer.lock",
+            ".lock",
+            # OS files
+            ".DS_Store", "Thumbs.db", "desktop.ini", "*.lnk",
+            # Environment files
+            ".env", ".env.*", "*.env", "*.cfg", "*.ini", ".flaskenv",
+            # Git/CI files
+            ".gitignore", ".gitattributes", ".gitmodules", ".github",
+            ".gitlab-ci.yml",
+            # Linter/formatter configs
+            ".prettierrc", ".eslintrc", ".eslintignore", ".stylelintrc",
+            ".editorconfig", ".jshintrc", ".pylintrc", ".flake8",
+            "mypy.ini", "pyproject.toml", "tsconfig.json",
+            # Build configs
+            "webpack.config.js", "babel.config.js", "rollup.config.js",
+            "jest.config.js", "karma.conf.js", "vite.config.js", "next.config.js",
+            # Minified/bundled files
+            "*.min.js", "*.min.css", "*.bundle.js", "*.bundle.css", "*.map",
+            # Archives
+            "*.gz", "*.zip", "*.tar", "*.tgz", "*.rar", "*.7z",
+            "*.iso", "*.dmg", "*.img",
+            # Installers/packages
+            "*.msix", "*.appx", "*.appxbundle", "*.xap", "*.ipa",
+            "*.deb", "*.rpm", "*.msi",
+            # Binaries
+            "*.exe", "*.dll", "*.so", "*.dylib", "*.o", "*.obj",
+            "*.jar", "*.war", "*.ear", "*.jsm", "*.class",
+            # Python compiled
+            "*.pyc", "*.pyd", "*.pyo", "__pycache__",
+        ],
+        description="Default files to exclude from file tree",
+    )
+
     # Monitoring settings
     enable_metrics: bool = Field(default=True, description="Enable metrics")
     metrics_port: int = Field(default=8001, description="Metrics port")
