@@ -717,7 +717,25 @@ pytest tests/bdd/test_wiki.py -v
 # Run by keyword
 pytest tests/bdd/ -k "register" -v    # All registration scenarios
 pytest tests/bdd/ -k "webhook" -v     # Webhook-related scenarios
+
+# Run specific scenario
+pytest tests/bdd/test_repositories.py -k "trigger_repository_analysis" -v
 ```
+
+#### Troubleshooting BDD Tests
+```bash
+# Run tests WITHOUT cleanup (preserves test data in MongoDB for inspection)
+pytest tests/bdd/test_repositories.py -v --no-cleanup
+
+# Run specific scenario without cleanup
+pytest tests/bdd/test_repositories.py -k "trigger_repository_analysis" -v --no-cleanup
+```
+
+The `--no-cleanup` flag:
+- Skips pre-test database cleanup (existing data preserved)
+- Skips post-scenario cleanup (created repositories/sessions remain)
+- Skips post-test database cleanup (all test data remains for inspection)
+- Useful for debugging failed tests by examining the database state
 
 #### Example Feature File
 ```gherkin

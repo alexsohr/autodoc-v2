@@ -119,17 +119,13 @@ class RepositoryService:
             # Store in database using repository pattern
             created_repo = await self._repository_repo.create(repository)
 
-            # Start analysis workflow (async)
-            asyncio.create_task(
-                self._trigger_analysis(
-                    str(created_repo.id), repository_data.url, repository_data.branch
-                )
-            )
+            # Note: Analysis is NOT auto-triggered on creation.
+            # Use the /analyze endpoint to explicitly start analysis.
 
             return {
                 "status": "success",
                 "repository": created_repo.model_dump(),
-                "message": "Repository created and analysis started",
+                "message": "Repository created successfully",
             }
 
         except Exception as e:
@@ -410,10 +406,14 @@ class RepositoryService:
             elif repository.analysis_status == AnalysisStatus.FAILED:
                 progress = 0.0
 
+            # Handle both enum and string types for analysis_status
+            # (Repository model uses use_enum_values=True, so values may be strings)
+            status_value = getattr(repository.analysis_status, 'value', repository.analysis_status)
+
             return {
                 "status": "success",
                 "repository_id": str(repository_id),
-                "analysis_status": repository.analysis_status.value,
+                "analysis_status": status_value,
                 "progress": progress,
                 "current_step": self._get_current_step(repository.analysis_status),
                 "last_analyzed": (

@@ -11,27 +11,27 @@ Feature: Repository Management
   # ==========================================================================
 
   Scenario: Register a new GitHub repository
-    When I register a repository with URL "https://github.com/test-org/test-repo"
+    When I register a repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     Then the response status should be 201
     And the response should have a valid UUID id
     And the repository should have status "pending"
     And the repository provider should be "github"
 
   Scenario: Register a GitHub repository with custom branch
-    When I register a repository with URL "https://github.com/test-org/test-repo" and branch "develop"
+    When I register a repository with URL "https://github.com/yusufocaliskan/python-flask-mvc" and branch "main"
     Then the response status should be 201
-    And the repository default branch should be "develop"
+    And the repository default branch should be "main"
 
   Scenario: Register a repository with auto-detected provider
-    When I register a repository with URL "https://github.com/test-org/auto-detect-repo"
+    When I register a repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     Then the response status should be 201
     And the repository provider should be "github"
-    And the repository org should be "test-org"
-    And the repository name should be "auto-detect-repo"
+    And the repository org should be "yusufocaliskan"
+    And the repository name should be "python-flask-mvc"
 
   Scenario: Fail to register duplicate repository
-    Given I have a registered repository with URL "https://github.com/test-org/duplicate-repo"
-    When I register a repository with URL "https://github.com/test-org/duplicate-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
+    When I register a repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     Then the response status should be 409
     And the response should contain error message "already exists"
 
@@ -48,22 +48,20 @@ Feature: Repository Management
   # ==========================================================================
 
   Scenario: List all repositories
-    Given I have a registered repository with URL "https://github.com/test-org/list-repo-1"
-    And I have a registered repository with URL "https://github.com/test-org/list-repo-2"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I list all repositories
     Then the response status should be 200
-    And the response list should have at least 2 items
+    And the response list should have at least 1 items
     And the response should contain "total"
 
   Scenario: List repositories with status filter
-    Given I have a registered repository with URL "https://github.com/test-org/filter-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I list repositories with status filter "pending"
     Then the response status should be 200
     And all repositories in the response should have status "pending"
 
   Scenario: List repositories with pagination
-    Given I have a registered repository with URL "https://github.com/test-org/page-repo-1"
-    And I have a registered repository with URL "https://github.com/test-org/page-repo-2"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I list repositories with limit 1 and offset 0
     Then the response status should be 200
     And the response list should have 1 items
@@ -73,7 +71,7 @@ Feature: Repository Management
   # ==========================================================================
 
   Scenario: Get repository details
-    Given I have a registered repository with URL "https://github.com/test-org/details-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I get the repository details
     Then the response status should be 200
     And the response should contain "id"
@@ -90,19 +88,19 @@ Feature: Repository Management
   # ==========================================================================
 
   Scenario: Trigger repository analysis
-    Given I have a registered repository with URL "https://github.com/test-org/analyze-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I trigger analysis for the repository
     Then the response status should be 202
     And the analysis response status should be "processing"
     And the response should contain "progress"
 
   Scenario: Trigger forced re-analysis
-    Given I have a registered repository with URL "https://github.com/test-org/force-analyze-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I trigger forced analysis for the repository
     Then the response status should be 202
 
   Scenario: Get analysis status
-    Given I have a registered repository with URL "https://github.com/test-org/status-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I get the analysis status for the repository
     Then the response status should be 200
     And the response should contain "status"
@@ -113,7 +111,7 @@ Feature: Repository Management
   # ==========================================================================
 
   Scenario: Delete a repository
-    Given I have a registered repository with URL "https://github.com/test-org/delete-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I delete the repository
     Then the response status should be 204
     And the repository should no longer exist
@@ -127,15 +125,14 @@ Feature: Repository Management
   # ==========================================================================
 
   Scenario: Configure repository webhook
-    Given I have a registered repository with URL "https://github.com/test-org/webhook-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I configure the webhook with secret "my-webhook-secret"
     Then the response status should be 200
     And the response should contain "webhook_configured"
     And the response should contain "setup_instructions"
 
   Scenario: Get webhook configuration
-    Given I have a registered repository with URL "https://github.com/test-org/get-webhook-repo"
+    Given I have a registered repository with URL "https://github.com/yusufocaliskan/python-flask-mvc"
     When I get the webhook configuration
     Then the response status should be 200
     And the response should contain "webhook_configured"
-

@@ -49,6 +49,7 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
 @router.post(
     "/",
     response_model=RepositoryResponse,
+    response_model_by_alias=False,
     status_code=status.HTTP_201_CREATED,
     summary="Register a new repository",
     description="Register a code repository for analysis and documentation generation. The repository will be automatically analyzed and indexed for chat queries and wiki generation.",
@@ -176,6 +177,7 @@ async def create_repository(
 @router.get(
     "/",
     response_model=RepositoryList,
+    response_model_by_alias=False,
     summary="List repositories",
     description="Get a paginated list of registered repositories with optional filtering by status and provider.",
     openapi_extra={
@@ -218,8 +220,8 @@ async def list_repositories(
         50, ge=1, le=100, description="Number of repositories to return"
     ),
     offset: int = Query(0, ge=0, description="Number of repositories to skip"),
-    status: Optional[AnalysisStatus] = Query(
-        None, description="Filter by analysis status"
+    analysis_status: Optional[AnalysisStatus] = Query(
+        None, alias="status", description="Filter by analysis status"
     ),
     provider: Optional[RepositoryProvider] = Query(
         None, description="Filter by repository provider"
@@ -233,7 +235,7 @@ async def list_repositories(
         result = await service.list_repositories(
             limit=limit,
             offset=offset,
-            status_filter=status.value if status else None,
+            status_filter=analysis_status.value if analysis_status else None,
             provider_filter=provider.value if provider else None,
         )
 
@@ -273,6 +275,7 @@ async def list_repositories(
 @router.get(
     "/{repository_id}",
     response_model=RepositoryResponse,
+    response_model_by_alias=False,
     summary="Get repository details",
     description="Retrieve detailed information about a specific repository including analysis status and webhook configuration.",
     openapi_extra={

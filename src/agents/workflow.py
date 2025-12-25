@@ -193,7 +193,7 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.full_analysis_workflow"})
         logger.debug(f"Full analysis workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
@@ -212,7 +212,7 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.document_processing_workflow"})
         logger.debug(
             f"Document processing workflow:\n {app.get_graph().draw_mermaid()}"
         )
@@ -233,7 +233,7 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.wiki_generation_workflow"})
         logger.debug(f"Wiki generation workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
@@ -256,7 +256,7 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.incremental_update_workflow"})
         logger.debug(f"Incremental update workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
@@ -275,7 +275,7 @@ class WorkflowOrchestrator:
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.chat_response_workflow"})
         logger.debug(f"Chat response workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 

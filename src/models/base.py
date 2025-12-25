@@ -54,6 +54,19 @@ class BaseDocument(_SerializerMixin, Document):
     class Settings:
         pass
 
+    # Configure serialization to use field names instead of aliases
+    # This ensures API responses use 'id' instead of '_id'
+    model_config = {
+        "populate_by_name": True,
+    }
+
+    def model_dump(self, **kwargs) -> dict[str, Any]:
+        """Override model_dump to use field names by default."""
+        # Default to by_alias=False unless explicitly specified
+        if "by_alias" not in kwargs:
+            kwargs["by_alias"] = False
+        return super().model_dump(**kwargs)
+
     def __init__(self, **data: Any) -> None:
         # Allow instantiation before init_beanie during unit tests
         if getattr(self.__class__, "_document_settings", None) is None:

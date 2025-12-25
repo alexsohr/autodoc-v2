@@ -89,14 +89,14 @@ class DocumentProcessingAgent:
         # Sequential processing flow
         workflow.add_edge("clone_repository", "discover_files")
         workflow.add_edge("discover_files", "process_content")
-        workflow.add_edge("process_content", "generate_embeddings")
-        workflow.add_edge("generate_embeddings", "store_documents")
-        workflow.add_edge("store_documents", "cleanup")
+        workflow.add_edge("process_content", "store_documents")
+        workflow.add_edge("store_documents", "generate_embeddings")
+        workflow.add_edge("generate_embeddings", "cleanup")
         workflow.add_edge("cleanup", END)
 
         # Error handling
         workflow.add_edge("handle_error", "cleanup")
-        app = workflow.compile()
+        app = workflow.compile().with_config({"run_name": "document_agent.document_processing_workflow"})
         logger.debug(
             f"Document processing workflow:\n {app.get_graph().draw_mermaid()}"
         )

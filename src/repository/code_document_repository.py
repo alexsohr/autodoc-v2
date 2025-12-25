@@ -17,7 +17,7 @@ class CodeDocumentRepository(BaseRepository[CodeDocument]):
 
     async def store_embedding(self, document_id: str, embedding: List[float]) -> None:
         await self.update_one(
-            {"id": document_id},
+            {"_id": document_id},
             {"embedding": embedding, "updated_at": datetime.now(timezone.utc)},
         )
 

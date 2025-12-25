@@ -87,7 +87,7 @@ class Settings(BaseSettings):
 
     # LLM provider settings
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key")
-    openai_model: str = Field(default="gpt-4-turbo-preview", description="OpenAI model")
+    openai_model: str = Field(default="gpt-4o-mini", description="OpenAI model")
     openai_max_tokens: int = Field(default=4000, description="OpenAI max tokens")
     openai_temperature: float = Field(default=0.1, description="OpenAI temperature")
 

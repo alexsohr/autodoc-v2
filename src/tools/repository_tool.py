@@ -85,6 +85,8 @@ class RepositoryTool(BaseTool):
             return await self.analyze_repository(**kwargs)
         elif operation == "discover_files":
             return await self.discover_files(**kwargs)
+        elif operation == "cleanup":
+            return await self.cleanup_repository(**kwargs)
         else:
             raise ValueError(f"Unknown repository operation: {operation}")
 
@@ -357,6 +359,7 @@ class RepositoryTool(BaseTool):
             )
 
         return {
+            "status": "success",
             "discovered_files": discovered_files,
             "skipped_files": skipped_files,
             "total_discovered": len(discovered_files),

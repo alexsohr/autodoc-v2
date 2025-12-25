@@ -7,6 +7,9 @@ including registration, listing, analysis, and deletion.
 import pytest
 from pytest_bdd import given, when, then, parsers
 
+# API prefix for all repository endpoints
+API_PREFIX = "/api/v2"
+
 
 # =============================================================================
 # Repository Registration Steps
@@ -16,9 +19,9 @@ from pytest_bdd import given, when, then, parsers
 def register_repository(client, context, url: str):
     """Register a new repository with the given URL."""
     payload = {"url": url}
-    response = client.post("/repositories", json=payload)
+    response = client.post(f"{API_PREFIX}/repositories", json=payload)
     context["response"] = response
-    
+
     if response.status_code == 201:
         repo_id = response.json()["id"]
         context["repository_id"] = repo_id
@@ -31,9 +34,9 @@ def register_repository(client, context, url: str):
 def register_repository_with_branch(client, context, url: str, branch: str):
     """Register a new repository with URL and custom branch."""
     payload = {"url": url, "branch": branch}
-    response = client.post("/repositories", json=payload)
+    response = client.post(f"{API_PREFIX}/repositories", json=payload)
     context["response"] = response
-    
+
     if response.status_code == 201:
         repo_id = response.json()["id"]
         context["repository_id"] = repo_id
@@ -46,8 +49,8 @@ def register_repository_with_branch(client, context, url: str, branch: str):
 def have_registered_repository(client, context, url: str):
     """Ensure a repository exists with the given URL."""
     payload = {"url": url}
-    response = client.post("/repositories", json=payload)
-    
+    response = client.post(f"{API_PREFIX}/repositories", json=payload)
+
     if response.status_code == 201:
         repo_id = response.json()["id"]
         context["repository_id"] = repo_id
@@ -68,8 +71,8 @@ def have_any_registered_repository(client, context):
     """Create a repository with a default URL if none exists."""
     if "repository_id" not in context:
         payload = {"url": "https://github.com/test-org/default-test-repo"}
-        response = client.post("/repositories", json=payload)
-        
+        response = client.post(f"{API_PREFIX}/repositories", json=payload)
+
         if response.status_code == 201:
             repo_id = response.json()["id"]
             context["repository_id"] = repo_id
@@ -85,21 +88,21 @@ def have_any_registered_repository(client, context):
 @when("I list all repositories")
 def list_all_repositories(client, context):
     """List all repositories."""
-    response = client.get("/repositories")
+    response = client.get(f"{API_PREFIX}/repositories")
     context["response"] = response
 
 
 @when(parsers.parse('I list repositories with status filter "{status}"'))
 def list_repositories_with_status(client, context, status: str):
     """List repositories filtered by status."""
-    response = client.get("/repositories", params={"status": status})
+    response = client.get(f"{API_PREFIX}/repositories", params={"status": status})
     context["response"] = response
 
 
 @when(parsers.parse("I list repositories with limit {limit:d} and offset {offset:d}"))
 def list_repositories_with_pagination(client, context, limit: int, offset: int):
     """List repositories with pagination parameters."""
-    response = client.get("/repositories", params={"limit": limit, "offset": offset})
+    response = client.get(f"{API_PREFIX}/repositories", params={"limit": limit, "offset": offset})
     context["response"] = response
 
 
@@ -128,15 +131,15 @@ def get_repository_details(client, context):
     """Get details of the current repository in context."""
     repository_id = context.get("repository_id")
     assert repository_id is not None, "No repository_id in context"
-    
-    response = client.get(f"/repositories/{repository_id}")
+
+    response = client.get(f"{API_PREFIX}/repositories/{repository_id}")
     context["response"] = response
 
 
 @when(parsers.parse('I get repository with ID "{repository_id}"'))
 def get_repository_by_id(client, context, repository_id: str):
     """Get details of a repository by its ID."""
-    response = client.get(f"/repositories/{repository_id}")
+    response = client.get(f"{API_PREFIX}/repositories/{repository_id}")
     context["response"] = response
 
 
@@ -149,8 +152,8 @@ def trigger_analysis(client, context):
     """Trigger analysis for the current repository in context."""
     repository_id = context.get("repository_id")
     assert repository_id is not None, "No repository_id in context"
-    
-    response = client.post(f"/repositories/{repository_id}/analyze")
+
+    response = client.post(f"{API_PREFIX}/repositories/{repository_id}/analyze")
     context["response"] = response
 
 
@@ -159,9 +162,9 @@ def trigger_forced_analysis(client, context):
     """Trigger forced re-analysis for the current repository."""
     repository_id = context.get("repository_id")
     assert repository_id is not None, "No repository_id in context"
-    
+
     response = client.post(
-        f"/repositories/{repository_id}/analyze",
+        f"{API_PREFIX}/repositories/{repository_id}/analyze",
         json={"force": True}
     )
     context["response"] = response
@@ -172,8 +175,8 @@ def get_analysis_status(client, context):
     """Get the analysis status for the current repository."""
     repository_id = context.get("repository_id")
     assert repository_id is not None, "No repository_id in context"
-    
-    response = client.get(f"/repositories/{repository_id}/status")
+
+    response = client.get(f"{API_PREFIX}/repositories/{repository_id}/status")
     context["response"] = response
 
 
@@ -198,8 +201,8 @@ def delete_repository(client, context):
     """Delete the current repository in context."""
     repository_id = context.get("repository_id")
     assert repository_id is not None, "No repository_id in context"
-    
-    response = client.delete(f"/repositories/{repository_id}")
+
+    response = client.delete(f"{API_PREFIX}/repositories/{repository_id}")
     context["response"] = response
     context["deleted_repository_id"] = repository_id
 
@@ -207,7 +210,7 @@ def delete_repository(client, context):
 @when(parsers.parse('I delete repository with ID "{repository_id}"'))
 def delete_repository_by_id(client, context, repository_id: str):
     """Delete a repository by its ID."""
-    response = client.delete(f"/repositories/{repository_id}")
+    response = client.delete(f"{API_PREFIX}/repositories/{repository_id}")
     context["response"] = response
 
 
@@ -216,8 +219,8 @@ def repository_should_not_exist(client, context):
     """Verify the deleted repository no longer exists."""
     repository_id = context.get("deleted_repository_id")
     assert repository_id is not None, "No deleted_repository_id in context"
-    
-    response = client.get(f"/repositories/{repository_id}")
+
+    response = client.get(f"{API_PREFIX}/repositories/{repository_id}")
     assert response.status_code == 404, (
         f"Expected 404 for deleted repository, got {response.status_code}"
     )
@@ -232,12 +235,12 @@ def configure_webhook(client, context, secret: str):
     """Configure webhook for the current repository."""
     repository_id = context.get("repository_id")
     assert repository_id is not None, "No repository_id in context"
-    
+
     payload = {
         "webhook_secret": secret,
         "subscribed_events": ["push", "pull_request"]
     }
-    response = client.put(f"/repositories/{repository_id}/webhook", json=payload)
+    response = client.put(f"{API_PREFIX}/repositories/{repository_id}/webhook", json=payload)
     context["response"] = response
 
 
@@ -246,8 +249,8 @@ def get_webhook_config(client, context):
     """Get webhook configuration for the current repository."""
     repository_id = context.get("repository_id")
     assert repository_id is not None, "No repository_id in context"
-    
-    response = client.get(f"/repositories/{repository_id}/webhook")
+
+    response = client.get(f"{API_PREFIX}/repositories/{repository_id}/webhook")
     context["response"] = response
 
 

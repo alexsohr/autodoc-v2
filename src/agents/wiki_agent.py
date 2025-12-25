@@ -142,7 +142,7 @@ class WikiGenerationAgent:
         # Error handling
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile()
+        app = workflow.compile().with_config({"run_name": "wiki_agent.wiki_generation_workflow"})
         logger.debug(f"Wiki generation workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 

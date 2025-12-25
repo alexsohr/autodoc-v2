@@ -1,21 +1,31 @@
-"""Pytest configuration and shared fixtures"""
+"""Pytest configuration and shared fixtures for full E2E testing
+
+This module provides fixtures for true end-to-end testing with:
+- Real MongoDB database
+- Real Git repository cloning
+- Real OpenAI LLM/embedding API calls
+- No mocking of any services
+"""
 
 import asyncio
 import os
-
-# Add src to path for testing
-import sys
 from typing import AsyncGenerator, Generator
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
+# Add src to path for testing
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from unittest.mock import patch
-
 from src.api.main import create_app
+
+
+# =============================================================================
+# Fixtures
+# =============================================================================
 
 
 @pytest.fixture(scope="session")
@@ -26,28 +36,57 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     loop.close()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def setup_test_environment():
+    """Set up test environment variables before any tests run.
+    
+    Uses a separate test database to isolate from development data.
+    OPENAI_API_KEY is expected to be in .env file and loaded by Settings.
+    """
+    # Set test database name to isolate from development data
+    os.environ["MONGODB_DATABASE"] = "autodoc_e2e_test"
+    os.environ["ENVIRONMENT"] = "testing"
+    os.environ["DEBUG"] = "true"
+    os.environ["LOG_LEVEL"] = "DEBUG"
+    
+    yield
+    
+    # Environment cleanup happens automatically when process ends
+
+
 @pytest.fixture
 def test_app():
-    """Create a test FastAPI application"""
-    # Mock database operations for testing
-    with (
-        patch("src.services.data_access.init_mongodb"),
-        patch("src.services.data_access.close_mongodb"),
-    ):
-        app = create_app()
-        return app
+    """Create a test FastAPI application for full E2E testing.
+    
+    This fixture uses the real application with NO mocking:
+    - Real MongoDB connection (test database)
+    - Real repository classes (RepositoryRepository, CodeDocumentRepository, etc.)
+    - Real service classes (RepositoryService, ChatService, etc.)
+    - Real LLMTool (OpenAI API calls)
+    - Real RepositoryTool (Git cloning)
+    - Real EmbeddingTool (OpenAI embeddings)
+    """
+    app = create_app()
+    
+    # No dependency overrides - use everything real
+    yield app
 
 
 @pytest.fixture
 def client(test_app) -> Generator[TestClient, None, None]:
-    """Create a test client for the FastAPI application"""
+    """Create a test client for the FastAPI application.
+    
+    Uses real MongoDB and real external services.
+    Data persists between requests within a test but is cleaned up
+    by the BDD context fixture after each scenario.
+    """
     with TestClient(test_app) as test_client:
         yield test_client
 
 
 @pytest.fixture
 async def async_client(test_app) -> AsyncGenerator[AsyncClient, None]:
-    """Create an async test client for the FastAPI application"""
+    """Create an async test client for the FastAPI application."""
     async with AsyncClient(
         app=test_app, base_url="http://testserver"
     ) as async_test_client:
@@ -55,32 +94,10 @@ async def async_client(test_app) -> AsyncGenerator[AsyncClient, None]:
 
 
 @pytest.fixture
-def mock_env_vars(monkeypatch):
-    """Mock environment variables for testing"""
-    env_vars = {
-        "ENVIRONMENT": "testing",
-        "DEBUG": "true",
-        "LOG_LEVEL": "DEBUG",
-        "MONGODB_URL": "mongodb://localhost:27017",
-        "MONGODB_DATABASE": "autodoc_test",
-        "STORAGE_TYPE": "local",
-        "STORAGE_BASE_PATH": "./test_data",
-        "SECRET_KEY": "test-secret-key-for-testing-only",
-        "OPENAI_API_KEY": "test-openai-key",
-        "OPENAI_MODEL": "gpt-3.5-turbo",
-    }
-
-    for key, value in env_vars.items():
-        monkeypatch.setenv(key, value)
-
-    return env_vars
-
-
-@pytest.fixture
 def sample_repository_data():
-    """Sample repository data for testing"""
+    """Sample repository data for testing - uses real public repository"""
     return {
-        "url": "https://github.com/test-org/test-repo",
+        "url": "https://github.com/yusufocaliskan/python-flask-mvc",
         "provider": "github",
         "branch": "main",
     }
