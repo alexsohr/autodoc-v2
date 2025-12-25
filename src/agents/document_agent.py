@@ -32,9 +32,16 @@ class DocumentProcessingState(TypedDict):
     repository_url: str
     branch: Optional[str]
     clone_path: Optional[str]
-    discovered_files: List[Dict[str, Any]]
-    processed_documents: List[Dict[str, Any]]
-    embeddings_generated: int
+
+    # New simplified outputs
+    documentation_files: List[Dict[str, str]]  # [{path, content}, ...]
+    file_tree: str  # ASCII tree structure
+
+    # Patterns (loaded from config, possibly overridden by .autodoc/autodoc.json)
+    excluded_dirs: List[str]
+    excluded_files: List[str]
+
+    # Workflow tracking
     current_step: str
     error_message: Optional[str]
     progress: float
