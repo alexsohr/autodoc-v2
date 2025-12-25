@@ -251,6 +251,51 @@ class DocumentProcessingAgent:
                 "error_type": type(e).__name__,
             }
 
+    async def _load_patterns_node(
+        self, state: DocumentProcessingState
+    ) -> DocumentProcessingState:
+        """Load exclusion patterns from config and optional .autodoc/autodoc.json override."""
+        try:
+            state["current_step"] = "loading_patterns"
+            state["progress"] = 25.0
+
+            # Start with defaults from config
+            excluded_dirs = list(self.settings.default_excluded_dirs)
+            excluded_files = list(self.settings.default_excluded_files)
+
+            # Check for .autodoc/autodoc.json override
+            if state["clone_path"]:
+                autodoc_config_path = Path(state["clone_path"]) / ".autodoc" / "autodoc.json"
+                if autodoc_config_path.exists():
+                    try:
+                        with open(autodoc_config_path, "r", encoding="utf-8") as f:
+                            autodoc_config = json.load(f)
+
+                        # Override with values from autodoc.json if present
+                        if "excluded_dirs" in autodoc_config:
+                            excluded_dirs = autodoc_config["excluded_dirs"]
+                            logger.info(f"Loaded excluded_dirs from .autodoc/autodoc.json")
+                        if "excluded_files" in autodoc_config:
+                            excluded_files = autodoc_config["excluded_files"]
+                            logger.info(f"Loaded excluded_files from .autodoc/autodoc.json")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Invalid .autodoc/autodoc.json: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to read .autodoc/autodoc.json: {e}")
+
+            state["excluded_dirs"] = excluded_dirs
+            state["excluded_files"] = excluded_files
+
+            state["messages"].append(
+                AIMessage(content=f"Loaded {len(excluded_dirs)} dir exclusions and {len(excluded_files)} file exclusions")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Load patterns node failed: {str(e)}"
+            return state
+
     async def _clone_repository_node(
         self, state: DocumentProcessingState
     ) -> DocumentProcessingState:
