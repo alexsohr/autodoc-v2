@@ -103,6 +103,37 @@ class DocumentProcessingAgent:
         self._repository_repo = repository_repo
         self.workflow = self._create_workflow()
 
+    def _matches_pattern(self, path: str, pattern: str) -> bool:
+        """Check if a path matches a pattern.
+
+        Supports:
+        - Exact matches: "README.md"
+        - Wildcards: "*.min.js"
+        - Glob patterns: "docs/**/*.md"
+        """
+        # Normalize path separators
+        path = path.replace("\\", "/")
+        pattern = pattern.replace("\\", "/")
+
+        # Handle ** glob patterns
+        if "**" in pattern:
+            # Convert glob pattern to regex-like matching
+            parts = pattern.split("**")
+            if len(parts) == 2:
+                prefix, suffix = parts
+                # Check if path starts with prefix (if any) and ends with suffix pattern
+                if prefix and not path.startswith(prefix.rstrip("/")):
+                    return False
+                if suffix:
+                    suffix = suffix.lstrip("/")
+                    # Get the remaining path after prefix
+                    remaining = path[len(prefix.rstrip("/")):].lstrip("/") if prefix else path
+                    return fnmatch.fnmatch(remaining, f"*{suffix}") or fnmatch.fnmatch(path, f"*{suffix}")
+                return True
+
+        # Handle simple wildcard patterns
+        return fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(os.path.basename(path), pattern)
+
     def _create_workflow(self) -> StateGraph:
         """Create the document processing workflow graph
 
