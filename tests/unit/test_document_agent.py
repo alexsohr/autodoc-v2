@@ -261,3 +261,58 @@ class TestExtractDocsNode:
             "start_time": "2025-01-01T00:00:00Z",
             "messages": [],
         }
+
+
+class TestDocumentAgentIntegration:
+    """Integration tests for DocumentProcessingAgent"""
+
+    def test_full_workflow_with_temp_repo(self):
+        """Test full workflow with a temporary repository structure"""
+        import asyncio
+        asyncio.run(self._test_full_workflow_with_temp_repo())
+
+    async def _test_full_workflow_with_temp_repo(self):
+        """Actual async test implementation"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create mock repo structure
+            (Path(tmpdir) / "src").mkdir()
+            (Path(tmpdir) / "src" / "main.py").write_text("print('hello')")
+            (Path(tmpdir) / "node_modules").mkdir()
+            (Path(tmpdir) / "node_modules" / "pkg.js").write_text("// pkg")
+            (Path(tmpdir) / "README.md").write_text("# Test Project")
+            (Path(tmpdir) / "CLAUDE.md").write_text("# Instructions for Claude")
+            (Path(tmpdir) / ".git").mkdir()
+
+            # Create agent with mocks that simulate successful clone
+            mock_repo_tool = MagicMock()
+            mock_repo_tool._arun = AsyncMock(return_value={
+                "status": "success",
+                "clone_path": tmpdir
+            })
+
+            mock_repo_repo = MagicMock()
+            mock_repo_repo.get_by_id = AsyncMock(return_value=MagicMock())
+            mock_repo_repo.update = AsyncMock()
+
+            agent = DocumentProcessingAgent(mock_repo_tool, mock_repo_repo)
+
+            result = await agent.process_repository(
+                repository_id="test-123",
+                repository_url="https://github.com/test/repo",
+                branch="main"
+            )
+
+            # Verify result structure
+            assert result["status"] == "success"
+            assert result["clone_path"] == tmpdir
+
+            # Verify tree excludes node_modules and .git
+            assert "node_modules" not in result["file_tree"]
+            assert ".git" not in result["file_tree"]
+            assert "src/" in result["file_tree"]
+            assert "main.py" in result["file_tree"]
+
+            # Verify docs were extracted
+            doc_paths = [d["path"] for d in result["documentation_files"]]
+            assert "README.md" in doc_paths
+            assert "CLAUDE.md" in doc_paths
