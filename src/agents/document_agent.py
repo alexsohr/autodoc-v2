@@ -357,6 +357,40 @@ class DocumentProcessingAgent:
             state["error_message"] = f"Load patterns node failed: {str(e)}"
             return state
 
+    async def _discover_and_build_tree_node(
+        self, state: DocumentProcessingState
+    ) -> DocumentProcessingState:
+        """Discover files and build ASCII tree structure."""
+        try:
+            state["current_step"] = "building_tree"
+            state["progress"] = 40.0
+
+            if not state["clone_path"]:
+                state["error_message"] = "No clone path available for tree building"
+                return state
+
+            # Build the file tree
+            file_tree = self._build_file_tree(
+                state["clone_path"],
+                state["excluded_dirs"],
+                state["excluded_files"]
+            )
+
+            state["file_tree"] = file_tree
+            state["progress"] = 50.0
+
+            # Count lines for message
+            line_count = len(file_tree.split("\n")) if file_tree else 0
+            state["messages"].append(
+                AIMessage(content=f"Built file tree with {line_count} entries")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Build tree node failed: {str(e)}"
+            return state
+
     async def _clone_repository_node(
         self, state: DocumentProcessingState
     ) -> DocumentProcessingState:
