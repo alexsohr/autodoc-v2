@@ -178,6 +178,18 @@ class Settings(BaseSettings):
     reload: bool = Field(default=True, description="Auto-reload on changes")
     workers: int = Field(default=1, description="Number of workers")
 
+    # MCP Filesystem settings
+    mcp_filesystem_enabled: bool = Field(
+        default=False, description="Enable MCP filesystem integration"
+    )
+    mcp_filesystem_command: str = Field(
+        default="npx", description="MCP filesystem server command"
+    )
+    mcp_filesystem_args: str = Field(
+        default="-y,fast-filesystem-mcp",
+        description="MCP filesystem server arguments (comma-separated)",
+    )
+
     @property
     def cors_origins_list(self) -> List[str]:
         """Get CORS origins as list"""
@@ -258,6 +270,13 @@ class Settings(BaseSettings):
     def is_langsmith_enabled(self) -> bool:
         """Check if LangSmith tracing is enabled and configured"""
         return self.langsmith_tracing and self.langsmith_api_key is not None
+
+    @property
+    def mcp_filesystem_args_list(self) -> List[str]:
+        """Get MCP filesystem args as list"""
+        if isinstance(self.mcp_filesystem_args, str):
+            return [arg.strip() for arg in self.mcp_filesystem_args.split(",")]
+        return self.mcp_filesystem_args if isinstance(self.mcp_filesystem_args, list) else []
 
 
 # Global settings instance

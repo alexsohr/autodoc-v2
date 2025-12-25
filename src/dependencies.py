@@ -27,6 +27,7 @@ from fastapi import Depends
 from .agents.document_agent import DocumentProcessingAgent
 from .agents.wiki_agent import WikiGenerationAgent
 from .agents.workflow import WorkflowOrchestrator
+from .services.mcp_filesystem_client import MCPFilesystemClient, get_mcp_filesystem_client
 from .models.chat import Answer, ChatSession, Question
 from .models.code_document import CodeDocument
 from .models.repository import Repository
@@ -147,21 +148,33 @@ def get_context_tool(
     )
 
 
+def get_mcp_client() -> MCPFilesystemClient:
+    """Get the global MCPFilesystemClient instance.
+
+    Returns the singleton MCP client that was initialized at application startup.
+    The client may or may not be initialized depending on settings.
+    """
+    return get_mcp_filesystem_client()
+
+
 def get_document_agent(
     repository_tool: Annotated[RepositoryTool, Depends(get_repository_tool)],
     embedding_tool: Annotated[EmbeddingTool, Depends(get_embedding_tool)],
     code_document_repo: Annotated[CodeDocumentRepository, Depends(get_code_document_repo)],
-    repository_repo: Annotated[RepositoryRepository, Depends(get_repository_repo)]
+    repository_repo: Annotated[RepositoryRepository, Depends(get_repository_repo)],
+    mcp_client: Annotated[MCPFilesystemClient, Depends(get_mcp_client)],
 ) -> DocumentProcessingAgent:
     """Get DocumentProcessingAgent instance with injected dependencies.
-    
+
     FastAPI will cache this per request automatically.
+    The MCP filesystem client is optionally used for enhanced file operations.
     """
     return DocumentProcessingAgent(
         repository_tool=repository_tool,
         embedding_tool=embedding_tool,
         code_document_repo=code_document_repo,
-        repository_repo=repository_repo
+        repository_repo=repository_repo,
+        mcp_filesystem_client=mcp_client if mcp_client.is_initialized else None,
     )
 
 
@@ -185,7 +198,7 @@ def get_document_service(
 
 def get_llm_tool() -> LLMTool:
     """Get LLMTool instance.
-    
+
     FastAPI will cache this per request automatically.
     """
     return LLMTool()

@@ -24,6 +24,7 @@ from src.api.middleware.error_handler import (
 from src.api.middleware.logging import request_logging_middleware
 from src.api.routes import chat, health, repositories, webhooks, wiki
 from src.repository.database import close_mongodb, init_mongodb
+from src.services.mcp_filesystem_client import close_mcp_filesystem, init_mcp_filesystem
 from src.utils.config_loader import get_settings
 
 
@@ -44,10 +45,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Initialize data access layer (MongoDB/Beanie)
         await init_mongodb()
         print("Database initialized successfully")
+
+        # Initialize MCP filesystem client (if enabled)
+        if settings.mcp_filesystem_enabled:
+            mcp_initialized = await init_mcp_filesystem()
+            if mcp_initialized:
+                print("MCP filesystem client initialized successfully")
+            else:
+                print("MCP filesystem client initialization failed (will use fallback)")
+        else:
+            print("MCP filesystem integration disabled")
+
         # TODO: Initialize storage adapters
         # TODO: Load LLM configurations
     except Exception as e:
-        print(f"Failed to initialize database: {e}")
+        print(f"Failed to initialize: {e}")
         raise
 
     yield
@@ -55,6 +67,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shutdown
     print("AutoDoc v2 shutting down...")
     try:
+        # Close MCP filesystem client
+        await close_mcp_filesystem()
+        print("MCP filesystem client closed")
+
         # Close database connections
         await close_mongodb()
         print("Database connections closed")

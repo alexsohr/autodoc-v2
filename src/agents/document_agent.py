@@ -17,6 +17,7 @@ from ..models.code_document import CodeDocument
 from ..models.repository import AnalysisStatus
 from ..repository.code_document_repository import CodeDocumentRepository
 from ..repository.repository_repository import RepositoryRepository
+from ..services.mcp_filesystem_client import MCPFilesystemClient
 from ..tools.embedding_tool import EmbeddingTool
 from ..tools.repository_tool import RepositoryTool
 from ..utils.config_loader import get_settings
@@ -48,21 +49,29 @@ class DocumentProcessingAgent:
     repository cloning to embedding generation and storage.
     """
 
-    def __init__(self, repository_tool: RepositoryTool, embedding_tool: EmbeddingTool, 
-                 code_document_repo: CodeDocumentRepository, repository_repo: RepositoryRepository):
+    def __init__(
+        self,
+        repository_tool: RepositoryTool,
+        embedding_tool: EmbeddingTool,
+        code_document_repo: CodeDocumentRepository,
+        repository_repo: RepositoryRepository,
+        mcp_filesystem_client: Optional[MCPFilesystemClient] = None,
+    ):
         """Initialize document processing agent with dependency injection.
-        
+
         Args:
             repository_tool: RepositoryTool instance (injected via DI).
             embedding_tool: EmbeddingTool instance (injected via DI).
             code_document_repo: CodeDocumentRepository instance (injected via DI).
             repository_repo: RepositoryRepository instance (injected via DI).
+            mcp_filesystem_client: Optional MCP filesystem client for enhanced file operations.
         """
         self.settings = get_settings()
         self._repository_tool = repository_tool
         self._embedding_tool = embedding_tool
         self._code_document_repo = code_document_repo
         self._repository_repo = repository_repo
+        self._mcp_client = mcp_filesystem_client
         self.workflow = self._create_workflow()
 
     def _create_workflow(self) -> StateGraph:
@@ -219,7 +228,11 @@ class DocumentProcessingAgent:
     async def _discover_files_node(
         self, state: DocumentProcessingState
     ) -> DocumentProcessingState:
-        """Discover files node"""
+        """Discover files node
+
+        Uses MCP filesystem client if available for enhanced performance,
+        otherwise falls back to the native RepositoryTool.
+        """
         try:
             state["current_step"] = "discovering_files"
             state["progress"] = 30.0
@@ -228,9 +241,15 @@ class DocumentProcessingAgent:
                 state["error_message"] = "No clone path available for file discovery"
                 return state
 
-            discovery_result = await self._repository_tool._arun(
-                "discover_files", repository_path=state["clone_path"]
-            )
+            # Try MCP client first if available and initialized
+            if self._mcp_client and self._mcp_client.is_initialized:
+                logger.info("Using MCP filesystem for file discovery")
+                discovery_result = await self._discover_files_with_mcp(state["clone_path"])
+            else:
+                logger.info("Using native RepositoryTool for file discovery")
+                discovery_result = await self._repository_tool._arun(
+                    "discover_files", repository_path=state["clone_path"]
+                )
 
             if discovery_result["status"] != "success":
                 state["error_message"] = (
@@ -254,10 +273,174 @@ class DocumentProcessingAgent:
             state["error_message"] = f"File discovery node failed: {str(e)}"
             return state
 
+    async def _discover_files_with_mcp(self, clone_path: str) -> Dict[str, Any]:
+        """Discover files using MCP filesystem client.
+
+        Args:
+            clone_path: Path to the cloned repository.
+
+        Returns:
+            Dictionary with discovered files in the expected format.
+        """
+        try:
+            # Get directory tree using MCP
+            tree_result = await self._mcp_client.get_directory_tree(clone_path)
+
+            if tree_result["status"] != "success":
+                # Fallback to native tool
+                logger.warning("MCP directory tree failed, falling back to native tool")
+                return await self._repository_tool._arun(
+                    "discover_files", repository_path=clone_path
+                )
+
+            # Transform MCP result to expected format
+            discovered_files = self._transform_mcp_tree_to_files(
+                tree_result.get("tree", {}), clone_path
+            )
+
+            return {
+                "status": "success",
+                "discovered_files": discovered_files,
+                "total_discovered": len(discovered_files),
+                "source": "mcp",
+            }
+
+        except Exception as e:
+            logger.warning(f"MCP file discovery failed: {e}, falling back to native tool")
+            return await self._repository_tool._arun(
+                "discover_files", repository_path=clone_path
+            )
+
+    def _transform_mcp_tree_to_files(
+        self, tree: Any, base_path: str, current_path: str = ""
+    ) -> List[Dict[str, Any]]:
+        """Transform MCP directory tree to flat file list.
+
+        Args:
+            tree: MCP directory tree structure.
+            base_path: Base path of the repository.
+            current_path: Current relative path in recursion.
+
+        Returns:
+            List of file dictionaries in expected format.
+        """
+        from pathlib import Path
+
+        files = []
+        supported_languages = self.settings.supported_languages
+
+        # Default exclude patterns
+        exclude_dirs = {
+            ".git", "__pycache__", "node_modules", ".venv", "venv",
+            ".env", ".idea", ".vscode", "dist", "build", ".tox"
+        }
+        exclude_extensions = {
+            ".pyc", ".pyo", ".pyd", ".so", ".dll", ".exe", ".bin",
+            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg",
+            ".pdf", ".zip", ".tar", ".gz", ".rar", ".7z"
+        }
+
+        # Language extension mapping
+        extension_to_language = {
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".tsx": "typescript",
+            ".jsx": "javascript",
+            ".java": "java",
+            ".go": "go",
+            ".rs": "rust",
+            ".cpp": "cpp",
+            ".c": "c",
+            ".h": "c",
+            ".hpp": "cpp",
+            ".cs": "csharp",
+            ".php": "php",
+            ".rb": "ruby",
+        }
+
+        def process_node(node: Any, rel_path: str) -> None:
+            if isinstance(node, dict):
+                for name, content in node.items():
+                    new_path = f"{rel_path}/{name}" if rel_path else name
+
+                    # Skip excluded directories
+                    if name in exclude_dirs:
+                        continue
+
+                    if isinstance(content, dict):
+                        # It's a directory, recurse
+                        process_node(content, new_path)
+                    else:
+                        # It's a file
+                        file_path = Path(base_path) / new_path
+                        ext = file_path.suffix.lower()
+
+                        # Skip excluded extensions
+                        if ext in exclude_extensions:
+                            continue
+
+                        # Detect language
+                        language = extension_to_language.get(ext, "unknown")
+                        if language not in supported_languages:
+                            continue
+
+                        try:
+                            stat = file_path.stat()
+                            files.append({
+                                "path": new_path.replace("\\", "/"),
+                                "full_path": str(file_path),
+                                "language": language,
+                                "size": stat.st_size,
+                                "modified_at": datetime.fromtimestamp(
+                                    stat.st_mtime
+                                ).isoformat(),
+                            })
+                        except OSError:
+                            pass
+
+            elif isinstance(node, list):
+                # Handle list of files/directories
+                for item in node:
+                    if isinstance(item, str):
+                        file_path = Path(base_path) / rel_path / item
+                        ext = file_path.suffix.lower()
+
+                        if ext in exclude_extensions:
+                            continue
+
+                        language = extension_to_language.get(ext, "unknown")
+                        if language not in supported_languages:
+                            continue
+
+                        try:
+                            stat = file_path.stat()
+                            full_rel_path = f"{rel_path}/{item}" if rel_path else item
+                            files.append({
+                                "path": full_rel_path.replace("\\", "/"),
+                                "full_path": str(file_path),
+                                "language": language,
+                                "size": stat.st_size,
+                                "modified_at": datetime.fromtimestamp(
+                                    stat.st_mtime
+                                ).isoformat(),
+                            })
+                        except OSError:
+                            pass
+                    elif isinstance(item, dict):
+                        process_node(item, rel_path)
+
+        process_node(tree, current_path)
+        return files
+
     async def _process_content_node(
         self, state: DocumentProcessingState
     ) -> DocumentProcessingState:
-        """Process file content node"""
+        """Process file content node
+
+        Uses MCP filesystem client for file reading if available,
+        otherwise falls back to native Python file operations.
+        """
         try:
             state["current_step"] = "processing_content"
             state["progress"] = 50.0
@@ -267,14 +450,23 @@ class DocumentProcessingAgent:
                 return state
 
             processed_documents = []
+            use_mcp = self._mcp_client and self._mcp_client.is_initialized
+
+            if use_mcp:
+                logger.info("Using MCP filesystem for file reading")
+            else:
+                logger.info("Using native file operations for file reading")
 
             # Process each discovered file
             for i, file_info in enumerate(state["discovered_files"]):
                 try:
                     # Read file content
                     file_path = file_info["full_path"]
-                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        content = f.read()
+                    content = await self._read_file_content(file_path, use_mcp)
+
+                    if content is None:
+                        logger.warning(f"Could not read file {file_info['path']}")
+                        continue
 
                     # Process content for embedding
                     processed_content = self._clean_content_for_embedding(
@@ -321,6 +513,33 @@ class DocumentProcessingAgent:
         except Exception as e:
             state["error_message"] = f"Content processing node failed: {str(e)}"
             return state
+
+    async def _read_file_content(self, file_path: str, use_mcp: bool) -> Optional[str]:
+        """Read file content using MCP or native operations.
+
+        Args:
+            file_path: Path to the file to read.
+            use_mcp: Whether to use MCP client.
+
+        Returns:
+            File content as string, or None if reading failed.
+        """
+        try:
+            if use_mcp:
+                result = await self._mcp_client.read_file(file_path)
+                if result["status"] == "success":
+                    return result.get("content", "")
+                else:
+                    # Fallback to native on MCP failure
+                    logger.debug(f"MCP read failed for {file_path}, using native")
+                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                        return f.read()
+            else:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    return f.read()
+        except Exception as e:
+            logger.warning(f"Failed to read file {file_path}: {e}")
+            return None
 
     async def _generate_embeddings_node(
         self, state: DocumentProcessingState
