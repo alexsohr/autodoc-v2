@@ -227,83 +227,78 @@ class DocumentProcessingAgent:
         return app
 
     async def process_repository(
-        self, repository_id: str, repository_url: str, branch: Optional[str] = None
+        self,
+        repository_id: str,
+        repository_url: str,
+        branch: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Process repository through complete document processing pipeline
+        """Process a repository and return documentation files + tree structure.
 
         Args:
-            repository_id: Repository identifier
-            repository_url: Repository URL to process
-            branch: Specific branch to process
+            repository_id: Unique identifier for the repository.
+            repository_url: URL of the repository to clone.
+            branch: Optional branch to clone (defaults to default branch).
 
         Returns:
-            Dictionary with processing results
+            Dict containing:
+                - clone_path: Path to cloned repository
+                - documentation_files: List of {path, content} dicts
+                - file_tree: ASCII tree string
+                - error_message: Error message if failed
         """
+        initial_state: DocumentProcessingState = {
+            "repository_id": repository_id,
+            "repository_url": repository_url,
+            "branch": branch,
+            "clone_path": None,
+            "documentation_files": [],
+            "file_tree": "",
+            "excluded_dirs": [],
+            "excluded_files": [],
+            "current_step": "initializing",
+            "error_message": None,
+            "progress": 0.0,
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "messages": [HumanMessage(content=f"Processing repository: {repository_url}")],
+        }
+
         try:
-            # Initialize state
-            initial_state: DocumentProcessingState = {
-                "repository_id": repository_id,
-                "repository_url": repository_url,
-                "branch": branch,
-                "clone_path": None,
-                "discovered_files": [],
-                "processed_documents": [],
-                "embeddings_generated": 0,
-                "current_step": "starting",
-                "error_message": None,
-                "progress": 0.0,
-                "start_time": datetime.now(timezone.utc).isoformat(),
-                "messages": [
-                    HumanMessage(content=f"Process repository: {repository_url}")
-                ],
-            }
-
             # Update repository status to processing
-            await self._update_repository_status(
-                repository_id, AnalysisStatus.PROCESSING
-            )
+            await self._update_repository_status(repository_id, AnalysisStatus.PROCESSING)
 
-            # Execute workflow
-            result = await self.workflow.ainvoke(initial_state)
+            # Run the workflow
+            final_state = await self.workflow.ainvoke(initial_state)
 
-            # Update final repository status
-            if result.get("error_message"):
-                await self._update_repository_status(
-                    repository_id,
-                    AnalysisStatus.FAILED,
-                    error_message=result["error_message"],
-                )
-            else:
-                await self._update_repository_status(
-                    repository_id,
-                    AnalysisStatus.COMPLETED,
-                    commit_sha=result.get("commit_sha"),
-                )
+            # Check for errors
+            if final_state.get("error_message"):
+                await self._update_repository_status(repository_id, AnalysisStatus.FAILED)
+                return {
+                    "status": "failed",
+                    "error": final_state["error_message"],
+                    "clone_path": final_state.get("clone_path"),
+                    "documentation_files": [],
+                    "file_tree": "",
+                }
+
+            # Update status to completed
+            await self._update_repository_status(repository_id, AnalysisStatus.COMPLETED)
 
             return {
-                "status": "completed" if not result.get("error_message") else "failed",
-                "repository_id": repository_id,
-                "processed_files": len(result.get("processed_documents", [])),
-                "embeddings_generated": result.get("embeddings_generated", 0),
-                "processing_time": result.get("processing_time", 0),
-                "error_message": result.get("error_message"),
+                "status": "success",
+                "clone_path": final_state["clone_path"],
+                "documentation_files": final_state["documentation_files"],
+                "file_tree": final_state["file_tree"],
             }
 
         except Exception as e:
-            logger.error(
-                f"Document processing failed for repository {repository_id}: {e}"
-            )
-
-            # Update repository status to failed
-            await self._update_repository_status(
-                repository_id, AnalysisStatus.FAILED, error_message=str(e)
-            )
-
+            logger.error(f"Repository processing failed: {e}")
+            await self._update_repository_status(repository_id, AnalysisStatus.FAILED)
             return {
                 "status": "failed",
-                "repository_id": repository_id,
                 "error": str(e),
-                "error_type": type(e).__name__,
+                "clone_path": None,
+                "documentation_files": [],
+                "file_tree": "",
             }
 
     async def _load_patterns_node(
