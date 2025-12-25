@@ -196,40 +196,34 @@ class DocumentProcessingAgent:
         return "\n".join(lines)
 
     def _create_workflow(self) -> StateGraph:
-        """Create the document processing workflow graph
+        """Create the document processing workflow graph.
 
         Returns:
-            LangGraph StateGraph for document processing
+            LangGraph StateGraph for document processing.
         """
-        # Create workflow graph
         workflow = StateGraph(DocumentProcessingState)
 
         # Add nodes
         workflow.add_node("clone_repository", self._clone_repository_node)
-        workflow.add_node("discover_files", self._discover_files_node)
-        workflow.add_node("process_content", self._process_content_node)
-        workflow.add_node("generate_embeddings", self._generate_embeddings_node)
-        workflow.add_node("store_documents", self._store_documents_node)
-        workflow.add_node("cleanup", self._cleanup_node)
+        workflow.add_node("load_patterns", self._load_patterns_node)
+        workflow.add_node("build_tree", self._discover_and_build_tree_node)
+        workflow.add_node("extract_docs", self._extract_docs_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
         # Define workflow edges
         workflow.add_edge(START, "clone_repository")
-
-        # Sequential processing flow
-        workflow.add_edge("clone_repository", "discover_files")
-        workflow.add_edge("discover_files", "process_content")
-        workflow.add_edge("process_content", "store_documents")
-        workflow.add_edge("store_documents", "generate_embeddings")
-        workflow.add_edge("generate_embeddings", "cleanup")
-        workflow.add_edge("cleanup", END)
+        workflow.add_edge("clone_repository", "load_patterns")
+        workflow.add_edge("load_patterns", "build_tree")
+        workflow.add_edge("build_tree", "extract_docs")
+        workflow.add_edge("extract_docs", END)
 
         # Error handling
-        workflow.add_edge("handle_error", "cleanup")
-        app = workflow.compile().with_config({"run_name": "document_agent.document_processing_workflow"})
-        logger.debug(
-            f"Document processing workflow:\n {app.get_graph().draw_mermaid()}"
+        workflow.add_edge("handle_error", END)
+
+        app = workflow.compile().with_config(
+            {"run_name": "document_agent.document_processing_workflow"}
         )
+        logger.debug(f"Document processing workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
     async def process_repository(
