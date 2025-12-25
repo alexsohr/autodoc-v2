@@ -90,26 +90,17 @@ class DocumentProcessingAgent:
     def __init__(
         self,
         repository_tool: RepositoryTool,
-        embedding_tool: EmbeddingTool,
-        code_document_repo: CodeDocumentRepository,
         repository_repo: RepositoryRepository,
-        mcp_filesystem_client: Optional[MCPFilesystemClient] = None,
     ):
         """Initialize document processing agent with dependency injection.
 
         Args:
-            repository_tool: RepositoryTool instance (injected via DI).
-            embedding_tool: EmbeddingTool instance (injected via DI).
-            code_document_repo: CodeDocumentRepository instance (injected via DI).
-            repository_repo: RepositoryRepository instance (injected via DI).
-            mcp_filesystem_client: Optional MCP filesystem client for enhanced file operations.
+            repository_tool: RepositoryTool instance for cloning repos.
+            repository_repo: RepositoryRepository instance for status updates.
         """
         self.settings = get_settings()
         self._repository_tool = repository_tool
-        self._embedding_tool = embedding_tool
-        self._code_document_repo = code_document_repo
         self._repository_repo = repository_repo
-        self._mcp_client = mcp_filesystem_client
         self.workflow = self._create_workflow()
 
     def _create_workflow(self) -> StateGraph:
