@@ -4,9 +4,13 @@ This module implements the document processing agent that handles
 repository analysis, file processing, and content preparation for embedding.
 """
 
+import fnmatch
+import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
@@ -23,6 +27,33 @@ from ..tools.repository_tool import RepositoryTool
 from ..utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Hardcoded patterns for documentation files to extract
+DOC_FILE_PATTERNS = [
+    # AI assistant instructions
+    "CLAUDE.md",
+    "claude.md",
+    ".claude/CLAUDE.md",
+    "agent.md",
+    "AGENT.md",
+    "llm.txt",
+    "LLM.txt",
+    "copilot-instructions.md",
+    ".github/copilot-instructions.md",
+    # Standard project docs
+    "README.md",
+    "README.txt",
+    "README",
+    "readme.md",
+    "CONTRIBUTING.md",
+    "ARCHITECTURE.md",
+    "CHANGELOG.md",
+    "CODEOWNERS",
+    ".github/CODEOWNERS",
+    # Docs folder (recursive)
+    "docs/**/*.md",
+    "doc/**/*.md",
+]
 
 
 class DocumentProcessingState(TypedDict):
