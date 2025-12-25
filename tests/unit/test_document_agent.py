@@ -146,3 +146,54 @@ class TestLoadPatternsNode:
             "start_time": "2025-01-01T00:00:00Z",
             "messages": [],
         }
+
+
+class TestBuildFileTree:
+    """Tests for _build_file_tree helper"""
+
+    def test_builds_simple_tree(self):
+        """Should build ASCII tree from directory"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create test structure
+            (Path(tmpdir) / "src").mkdir()
+            (Path(tmpdir) / "src" / "main.py").touch()
+            (Path(tmpdir) / "README.md").touch()
+
+            agent = self._create_mock_agent()
+            tree = agent._build_file_tree(tmpdir, [], [])
+
+            assert "src/" in tree
+            assert "main.py" in tree
+            assert "README.md" in tree
+
+    def test_excludes_directories(self):
+        """Should exclude specified directories"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "src").mkdir()
+            (Path(tmpdir) / "node_modules").mkdir()
+            (Path(tmpdir) / "src" / "main.py").touch()
+            (Path(tmpdir) / "node_modules" / "pkg.js").touch()
+
+            agent = self._create_mock_agent()
+            tree = agent._build_file_tree(tmpdir, ["node_modules/"], [])
+
+            assert "src/" in tree
+            assert "node_modules" not in tree
+
+    def test_excludes_files(self):
+        """Should exclude specified files"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "main.py").touch()
+            (Path(tmpdir) / "test.min.js").touch()
+
+            agent = self._create_mock_agent()
+            tree = agent._build_file_tree(tmpdir, [], ["*.min.js"])
+
+            assert "main.py" in tree
+            assert "test.min.js" not in tree
+
+    def _create_mock_agent(self):
+        mock_repo_tool = MagicMock()
+        mock_repo_repo = MagicMock()
+        with patch.object(DocumentProcessingAgent, '_create_workflow', return_value=MagicMock()):
+            return DocumentProcessingAgent(mock_repo_tool, mock_repo_repo)

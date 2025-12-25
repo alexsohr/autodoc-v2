@@ -134,6 +134,67 @@ class DocumentProcessingAgent:
         # Handle simple wildcard patterns
         return fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(os.path.basename(path), pattern)
 
+    def _build_file_tree(
+        self, root_path: str, excluded_dirs: List[str], excluded_files: List[str]
+    ) -> str:
+        """Build ASCII tree representation of directory structure.
+
+        Args:
+            root_path: Root directory to build tree from.
+            excluded_dirs: List of directory patterns to exclude.
+            excluded_files: List of file patterns to exclude.
+
+        Returns:
+            ASCII tree string.
+        """
+        lines = []
+        root = Path(root_path)
+
+        def should_exclude_dir(dir_path: Path) -> bool:
+            rel_path = str(dir_path.relative_to(root)).replace("\\", "/") + "/"
+            dir_name = dir_path.name + "/"
+            for pattern in excluded_dirs:
+                pattern = pattern.replace("\\", "/")
+                # Match against relative path or just directory name
+                if self._matches_pattern(rel_path, pattern) or self._matches_pattern(dir_name, pattern):
+                    return True
+            return False
+
+        def should_exclude_file(file_path: Path) -> bool:
+            rel_path = str(file_path.relative_to(root)).replace("\\", "/")
+            file_name = file_path.name
+            for pattern in excluded_files:
+                if self._matches_pattern(rel_path, pattern) or self._matches_pattern(file_name, pattern):
+                    return True
+            return False
+
+        def add_tree(path: Path, prefix: str = ""):
+            entries = sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
+
+            # Filter entries
+            filtered = []
+            for entry in entries:
+                if entry.is_dir():
+                    if not should_exclude_dir(entry):
+                        filtered.append(entry)
+                else:
+                    if not should_exclude_file(entry):
+                        filtered.append(entry)
+
+            for i, entry in enumerate(filtered):
+                is_last = i == len(filtered) - 1
+                connector = "└── " if is_last else "├── "
+
+                if entry.is_dir():
+                    lines.append(f"{prefix}{connector}{entry.name}/")
+                    extension = "    " if is_last else "│   "
+                    add_tree(entry, prefix + extension)
+                else:
+                    lines.append(f"{prefix}{connector}{entry.name}")
+
+        add_tree(root)
+        return "\n".join(lines)
+
     def _create_workflow(self) -> StateGraph:
         """Create the document processing workflow graph
 
