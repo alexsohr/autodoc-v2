@@ -391,6 +391,71 @@ class DocumentProcessingAgent:
             state["error_message"] = f"Build tree node failed: {str(e)}"
             return state
 
+    async def _extract_docs_node(
+        self, state: DocumentProcessingState
+    ) -> DocumentProcessingState:
+        """Extract documentation files content."""
+        try:
+            state["current_step"] = "extracting_docs"
+            state["progress"] = 60.0
+
+            if not state["clone_path"]:
+                state["error_message"] = "No clone path available for doc extraction"
+                return state
+
+            root = Path(state["clone_path"])
+            documentation_files = []
+
+            for pattern in DOC_FILE_PATTERNS:
+                if "**" in pattern:
+                    # Glob pattern
+                    for file_path in root.glob(pattern):
+                        if file_path.is_file():
+                            try:
+                                content = file_path.read_text(encoding="utf-8")
+                                rel_path = str(file_path.relative_to(root)).replace("\\", "/")
+                                documentation_files.append({
+                                    "path": rel_path,
+                                    "content": content
+                                })
+                            except Exception as e:
+                                logger.warning(f"Failed to read {file_path}: {e}")
+                else:
+                    # Exact file match
+                    file_path = root / pattern
+                    if file_path.is_file():
+                        try:
+                            content = file_path.read_text(encoding="utf-8")
+                            rel_path = str(file_path.relative_to(root)).replace("\\", "/")
+                            documentation_files.append({
+                                "path": rel_path,
+                                "content": content
+                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to read {file_path}: {e}")
+
+            # Deduplicate by path (case-insensitive for cross-platform compatibility)
+            seen_paths = set()
+            unique_docs = []
+            for doc in documentation_files:
+                path_lower = doc["path"].lower()
+                if path_lower not in seen_paths:
+                    seen_paths.add(path_lower)
+                    unique_docs.append(doc)
+
+            state["documentation_files"] = unique_docs
+            state["progress"] = 80.0
+
+            state["messages"].append(
+                AIMessage(content=f"Extracted {len(unique_docs)} documentation files")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Extract docs node failed: {str(e)}"
+            return state
+
     async def _clone_repository_node(
         self, state: DocumentProcessingState
     ) -> DocumentProcessingState:

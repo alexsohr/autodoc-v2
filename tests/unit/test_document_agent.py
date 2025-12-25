@@ -197,3 +197,67 @@ class TestBuildFileTree:
         mock_repo_repo = MagicMock()
         with patch.object(DocumentProcessingAgent, '_create_workflow', return_value=MagicMock()):
             return DocumentProcessingAgent(mock_repo_tool, mock_repo_repo)
+
+
+class TestExtractDocsNode:
+    """Tests for _extract_docs_node"""
+
+    def test_extracts_readme(self):
+        """Should extract README.md content"""
+        import asyncio
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readme_content = "# Test Project\n\nThis is a test."
+            (Path(tmpdir) / "README.md").write_text(readme_content)
+
+            agent = self._create_mock_agent()
+            state = self._create_state_with_clone_path(tmpdir)
+
+            result = asyncio.run(agent._extract_docs_node(state))
+
+            assert len(result["documentation_files"]) == 1
+            assert result["documentation_files"][0]["path"] == "README.md"
+            assert result["documentation_files"][0]["content"] == readme_content
+
+    def test_extracts_multiple_docs(self):
+        """Should extract multiple doc files"""
+        import asyncio
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "README.md").write_text("# README")
+            (Path(tmpdir) / "CLAUDE.md").write_text("# Claude")
+            (Path(tmpdir) / "docs").mkdir()
+            (Path(tmpdir) / "docs" / "guide.md").write_text("# Guide")
+
+            agent = self._create_mock_agent()
+            state = self._create_state_with_clone_path(tmpdir)
+
+            result = asyncio.run(agent._extract_docs_node(state))
+
+            paths = [d["path"] for d in result["documentation_files"]]
+            assert "README.md" in paths
+            assert "CLAUDE.md" in paths
+            assert "docs/guide.md" in paths or "docs\\guide.md" in paths
+
+    def _create_mock_agent(self):
+        mock_repo_tool = MagicMock()
+        mock_repo_repo = MagicMock()
+        with patch.object(DocumentProcessingAgent, '_create_workflow', return_value=MagicMock()):
+            return DocumentProcessingAgent(mock_repo_tool, mock_repo_repo)
+
+    def _create_state_with_clone_path(self, clone_path: str) -> DocumentProcessingState:
+        return {
+            "repository_id": "test-id",
+            "repository_url": "https://github.com/test/repo",
+            "branch": "main",
+            "clone_path": clone_path,
+            "documentation_files": [],
+            "file_tree": "",
+            "excluded_dirs": [],
+            "excluded_files": [],
+            "current_step": "init",
+            "error_message": None,
+            "progress": 0.0,
+            "start_time": "2025-01-01T00:00:00Z",
+            "messages": [],
+        }
