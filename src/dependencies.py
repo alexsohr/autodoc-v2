@@ -159,22 +159,15 @@ def get_mcp_client() -> MCPFilesystemClient:
 
 def get_document_agent(
     repository_tool: Annotated[RepositoryTool, Depends(get_repository_tool)],
-    embedding_tool: Annotated[EmbeddingTool, Depends(get_embedding_tool)],
-    code_document_repo: Annotated[CodeDocumentRepository, Depends(get_code_document_repo)],
     repository_repo: Annotated[RepositoryRepository, Depends(get_repository_repo)],
-    mcp_client: Annotated[MCPFilesystemClient, Depends(get_mcp_client)],
 ) -> DocumentProcessingAgent:
     """Get DocumentProcessingAgent instance with injected dependencies.
 
     FastAPI will cache this per request automatically.
-    The MCP filesystem client is optionally used for enhanced file operations.
     """
     return DocumentProcessingAgent(
         repository_tool=repository_tool,
-        embedding_tool=embedding_tool,
-        code_document_repo=code_document_repo,
         repository_repo=repository_repo,
-        mcp_filesystem_client=mcp_client if mcp_client.is_initialized else None,
     )
 
 
