@@ -161,6 +161,31 @@ class TestRepositoryModel:
         assert repo.commit_sha == commit_sha
         assert repo.last_analyzed is not None
 
+    def test_repository_clone_path_field(self):
+        """Test that Repository has optional clone_path field."""
+        repo = Repository(
+            provider=RepositoryProvider.GITHUB,
+            url="https://github.com/test/repo",
+            org="test",
+            name="repo",
+            default_branch="main",
+            access_scope=AccessScope.PUBLIC,
+            clone_path="/tmp/repo_clone",
+        )
+        assert repo.clone_path == "/tmp/repo_clone"
+
+    def test_repository_clone_path_defaults_to_none(self):
+        """Test that clone_path defaults to None."""
+        repo = Repository(
+            provider=RepositoryProvider.GITHUB,
+            url="https://github.com/test/repo",
+            org="test",
+            name="repo",
+            default_branch="main",
+            access_scope=AccessScope.PUBLIC,
+        )
+        assert repo.clone_path is None
+
 
 class TestCodeDocumentModel:
     """Test CodeDocument model functionality"""

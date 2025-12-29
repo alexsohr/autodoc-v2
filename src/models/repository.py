@@ -66,6 +66,9 @@ class Repository(BaseDocument):
     commit_sha: Optional[str] = Field(
         default=None, description="Last analyzed commit SHA"
     )
+    clone_path: Optional[str] = Field(
+        default=None, description="Local path where repository was cloned"
+    )
 
     # Webhook configuration fields
     webhook_configured: bool = Field(
