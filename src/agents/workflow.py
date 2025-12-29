@@ -426,7 +426,7 @@ class WorkflowOrchestrator:
                 branch=state["branch"],
             )
 
-            if processing_result["status"] != "completed":
+            if processing_result["status"] != "success":
                 state["error_message"] = (
                     f"Document processing failed: {processing_result.get('error_message', 'Unknown error')}"
                 )
@@ -437,9 +437,10 @@ class WorkflowOrchestrator:
             state["results"]["document_processing"] = processing_result
 
             # Add success message
+            doc_files = processing_result.get("documentation_files", [])
             state["messages"].append(
                 AIMessage(
-                    content=f"Processed {processing_result['processed_files']} documents with {processing_result['embeddings_generated']} embeddings"
+                    content=f"Processed repository with {len(doc_files)} documentation files"
                 )
             )
 
@@ -857,3 +858,23 @@ class WorkflowOrchestrator:
         }
 
         return descriptions.get(workflow_type, "Unknown workflow")
+
+    def _format_documentation_files(self, doc_files: List[Dict[str, str]]) -> str:
+        """Format documentation files into a single string with citations.
+
+        Args:
+            doc_files: List of dicts with 'path' and 'content' keys.
+
+        Returns:
+            Formatted string with file citations.
+        """
+        if not doc_files:
+            return ""
+
+        parts = []
+        for doc in doc_files:
+            path = doc.get("path", "unknown")
+            content = doc.get("content", "")
+            parts.append(f"--- {path} ---\n{content}")
+
+        return "\n\n".join(parts)
