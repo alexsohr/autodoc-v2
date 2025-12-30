@@ -53,6 +53,7 @@ dependencies = [
     "tenacity>=8.2.3",
     "gunicorn>=21.2.0",
     "langchain-mcp-adapters>=0.1.0",
+    "deepagents>=0.2.0",
 ]
 
 [project.optional-dependencies]
@@ -136,6 +137,7 @@ module = [
     "langchain_community.*",
     "langchain_mcp_adapters.*",
     "langsmith.*",
+    "deepagents.*",
     "boto3.*",
     "botocore.*",
 ]
