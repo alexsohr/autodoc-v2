@@ -107,7 +107,7 @@ class LLMTool(BaseTool):
                     model=settings.openai_model,
                     max_tokens=settings.openai_max_tokens,
                     temperature=settings.openai_temperature,
-                    timeout=30,
+                    timeout=120,
                 )
 
             # Google Gemini provider
