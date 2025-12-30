@@ -168,8 +168,10 @@ def create_structure_agent(
     }
 
     if model:
-        from langchain_openai import ChatOpenAI
-        agent_kwargs["model"] = ChatOpenAI(model=model, temperature=0)
+        from langchain.chat_models import init_chat_model
+        # Use init_chat_model with provider:model format for deepagents compatibility
+        model_string = f"openai:{model}" if not model.startswith(("openai:", "anthropic:", "google:")) else model
+        agent_kwargs["model"] = init_chat_model(model_string, temperature=0)
 
     agent = create_deep_agent(**agent_kwargs)
 
