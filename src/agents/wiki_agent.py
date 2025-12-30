@@ -349,6 +349,7 @@ Remember:
     ) -> WikiGenerationState:
         """Generate wiki structure using Deep Agent for repository exploration."""
         from pathlib import Path
+
         from src.agents.deep_structure_agent import run_structure_agent
 
         try:

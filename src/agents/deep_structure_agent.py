@@ -35,7 +35,7 @@ class FinalizeWikiStructureInput(BaseModel):
     )
 
 
-def create_finalize_tool(capture_dict: Dict[str, Any]):
+def create_finalize_tool(capture_dict: Dict[str, Any]) -> Any:
     """Create the finalize_wiki_structure tool with closure for capturing output.
 
     Args:
