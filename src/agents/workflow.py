@@ -491,9 +491,16 @@ class WorkflowOrchestrator:
 
                     return state
 
-            # Generate wiki using wiki agent
+            # Extract data from document processing results
+            doc_result = state["results"].get("document_processing", {})
+            file_tree = doc_result.get("file_tree", "")
+            readme_content = doc_result.get("readme_content", "")
+
+            # Generate wiki using wiki agent with pre-processed data
             wiki_result = await self._wiki_agent.generate_wiki(
                 repository_id=state["repository_id"],
+                file_tree=file_tree,
+                readme_content=readme_content,
                 force_regenerate=state["force_update"],
             )
 
