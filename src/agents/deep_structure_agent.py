@@ -169,9 +169,9 @@ def create_structure_agent(
 
     if model:
         from langchain.chat_models import init_chat_model
-        # Use init_chat_model with provider:model format for deepagents compatibility
-        model_string = f"openai:{model}" if not model.startswith(("openai:", "anthropic:", "google:")) else model
-        agent_kwargs["model"] = init_chat_model(model_string, temperature=0)
+        # Use init_chat_model for deepagents compatibility
+        logger.info(f"Initializing Deep Agent with model: {model}")
+        agent_kwargs["model"] = init_chat_model(model=model, temperature=0)
 
     agent = create_deep_agent(**agent_kwargs)
 
@@ -214,7 +214,9 @@ async def run_structure_agent(
     )
 
     try:
-        await asyncio.wait_for(
+        logger.info(f"Starting Deep Agent for {owner}/{repo}, timeout={timeout}s")
+
+        result = await asyncio.wait_for(
             agent.ainvoke({
                 "messages": [{
                     "role": "user",
@@ -225,18 +227,23 @@ async def run_structure_agent(
             timeout=timeout
         )
 
+        logger.info(f"Deep Agent completed, result keys: {list(result.keys()) if result else 'None'}")
+
         # Retrieve captured structure
         structure = getattr(agent, "_structure_capture", {})
 
+        logger.info(f"Captured structure keys: {list(structure.keys()) if structure else 'empty'}")
+
         if structure and structure.get("pages"):
+            logger.info(f"Wiki structure generated with {len(structure['pages'])} pages")
             return structure
 
-        logger.warning("Agent did not produce wiki structure")
+        logger.warning(f"Agent did not produce wiki structure, captured: {structure}")
         return None
 
     except asyncio.TimeoutError:
-        logger.error("Structure agent timed out", timeout=timeout)
+        logger.error(f"Structure agent timed out after {timeout}s")
         return None
     except Exception as e:
-        logger.error("Structure agent failed", error=str(e))
+        logger.exception(f"Structure agent failed: {e}")
         return None
