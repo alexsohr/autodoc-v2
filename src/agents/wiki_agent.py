@@ -71,7 +71,6 @@ class WikiGenerationState(TypedDict):
     """State for wiki generation workflow"""
 
     repository_id: str
-    repository_info: Dict[str, Any]
     file_tree: str
     readme_content: str
     wiki_structure: Optional[Dict[str, Any]]
@@ -305,7 +304,6 @@ Remember:
             # Initialize state
             initial_state: WikiGenerationState = {
                 "repository_id": repository_id,
-                "repository_info": {},
                 "file_tree": "",
                 "readme_content": "",
                 "wiki_structure": None,
@@ -357,9 +355,6 @@ Remember:
                 state["error_message"] = "Repository not found"
                 return state
 
-            # Convert repository model to dict for state
-            state["repository_info"] = repository.model_dump(mode="python")
-
             # Get file tree from processed documents
             documents = await self._code_document_repo.find_many(
                 {"repository_id": UUID(state["repository_id"])},
@@ -400,10 +395,16 @@ Remember:
             state["current_step"] = "generating_structure"
             state["progress"] = 30.0
 
-            # Extract repository info
-            repo_info = state["repository_info"]
-            owner = repo_info.get("org", "unknown")
-            repo_name = repo_info.get("name", "unknown")
+            # Fetch repository from database to get org and name
+            repository = await self._repository_repo.find_one(
+                {"id": UUID(state["repository_id"])}
+            )
+            if not repository:
+                state["error_message"] = "Repository not found"
+                return state
+
+            owner = repository.org or "unknown"
+            repo_name = repository.name or "unknown"
 
             # Prepare structure generation prompt
             structure_prompt = self.structure_prompt_template.format(
@@ -415,7 +416,7 @@ Remember:
 
             # Generate structure using LLM with structured output
             wiki_structure = await self._generate_structured_wiki_structure(
-                structure_prompt, state["repository_info"]
+                structure_prompt
             )
 
             if not wiki_structure:
@@ -677,13 +678,12 @@ Remember:
             return "Could not extract README content."
 
     async def _generate_structured_wiki_structure(
-        self, structure_prompt: str, repository_info: Dict[str, Any]
+        self, structure_prompt: str
     ) -> Optional[Dict[str, Any]]:
         """Generate wiki structure using LLM with structured output
 
         Args:
             structure_prompt: Prompt for structure generation
-            repository_info: Repository information
 
         Returns:
             Structured wiki data or None
