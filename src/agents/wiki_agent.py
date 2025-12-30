@@ -15,7 +15,6 @@ from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, Field
 
 from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
@@ -26,40 +25,6 @@ from ..tools.context_tool import ContextTool
 from ..tools.llm_tool import LLMTool
 
 logger = logging.getLogger(__name__)
-
-
-# Pydantic models for structured output
-class WikiPageSchema(BaseModel):
-    """Schema for wiki page structure"""
-
-    id: str = Field(description="Unique page identifier (URL-friendly)")
-    title: str = Field(description="Page title")
-    description: str = Field(description="Brief description of what this page covers")
-    importance: str = Field(description="Page importance: high, medium, or low")
-    file_paths: List[str] = Field(
-        description="List of relevant file paths from the repository"
-    )
-    related_pages: List[str] = Field(
-        default_factory=list, description="List of related page IDs"
-    )
-
-
-class WikiSectionSchema(BaseModel):
-    """Schema for wiki section structure"""
-
-    id: str = Field(description="Unique section identifier (URL-friendly)")
-    title: str = Field(description="Section title")
-    pages: List[WikiPageSchema] = Field(
-        default_factory=list, description="List of pages in this section"
-    )
-
-
-class WikiStructureSchema(BaseModel):
-    """Schema for complete wiki structure"""
-
-    title: str = Field(description="Overall title for the wiki")
-    description: str = Field(description="Brief description of the repository")
-    sections: List[WikiSectionSchema] = Field(description="List of wiki sections containing pages")
 
 
 class WikiGenerationState(TypedDict):
@@ -613,39 +578,6 @@ Remember:
         except Exception as e:
             logger.error(f"Error handling node failed: {e}")
             return state
-
-    async def _generate_structured_wiki_structure(
-        self, structure_prompt: str
-    ) -> Optional[Dict[str, Any]]:
-        """Generate wiki structure using LLM with structured output
-
-        Args:
-            structure_prompt: Prompt for structure generation
-
-        Returns:
-            Structured wiki data or None
-        """
-        try:
-            # Generate structured wiki structure using LLM tool
-            generation_result = await self._llm_tool._arun(
-                "generate_structured",
-                prompt=structure_prompt,
-                schema=WikiStructureSchema,
-                system_message="You are an expert technical writer creating wiki structures for software projects.",
-            )
-
-            if generation_result["status"] != "success":
-                logger.error(
-                    f"Structured generation failed: {generation_result.get('error')}"
-                )
-                return None
-
-            wiki_structure = generation_result["structured_output"]
-            return wiki_structure
-
-        except Exception as e:
-            logger.error(f"Structured wiki generation failed: {e}")
-            return None
 
     async def _generate_page_content(
         self, page_info: Dict[str, Any], repository_id: str
