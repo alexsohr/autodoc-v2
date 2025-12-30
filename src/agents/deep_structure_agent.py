@@ -169,9 +169,14 @@ def create_structure_agent(
 
     if model:
         from langchain.chat_models import init_chat_model
-        # Use init_chat_model for deepagents compatibility
-        logger.info(f"Initializing Deep Agent with model: {model}")
-        agent_kwargs["model"] = init_chat_model(model=model, temperature=0)
+        # Use init_chat_model with explicit provider:model format
+        # Add openai: prefix if no provider specified (e.g., gpt-4o-mini -> openai:gpt-4o-mini)
+        if ":" not in model:
+            model_string = f"openai:{model}"
+        else:
+            model_string = model
+        logger.info(f"Initializing Deep Agent with model: {model_string}")
+        agent_kwargs["model"] = init_chat_model(model_string, temperature=0)
 
     agent = create_deep_agent(**agent_kwargs)
 
