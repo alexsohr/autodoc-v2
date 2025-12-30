@@ -349,11 +349,20 @@ Remember:
     async def _analyze_repository_node(
         self, state: WikiGenerationState
     ) -> WikiGenerationState:
-        """Analyze repository for wiki generation"""
+        """Analyze repository for wiki generation - uses pre-populated values"""
         try:
             state["current_step"] = "analyzing_repository"
             state["progress"] = 10.0
 
+            # Validate we have the required data
+            if not state["file_tree"]:
+                state["error_message"] = "No file tree provided"
+                return state
+
+            if not state["readme_content"]:
+                logger.warning("No readme content provided, wiki may be less detailed")
+
+            # Verify repository exists
             repository = await self._repository_repo.find_one(
                 {"id": UUID(state["repository_id"])}
             )
@@ -361,30 +370,12 @@ Remember:
                 state["error_message"] = "Repository not found"
                 return state
 
-            # Get file tree from processed documents
-            documents = await self._code_document_repo.find_many(
-                {"repository_id": UUID(state["repository_id"])},
-                limit=1000
-            )
-
-            if not documents:
-                state["error_message"] = "No processed documents found for repository"
-                return state
-
-            # Build file tree
-            file_paths = [doc.file_path for doc in documents]
-            state["file_tree"] = self._build_file_tree(file_paths)
-
-            # Find and read README - convert models to dicts
-            documents_dicts = [doc.model_dump(mode="python") for doc in documents]
-            readme_content = await self._find_readme_content(documents_dicts)
-            state["readme_content"] = readme_content
-
             state["progress"] = 20.0
 
-            # Add success message
+            # Count files in tree for logging
+            file_count = state["file_tree"].count("├") + state["file_tree"].count("└")
             state["messages"].append(
-                AIMessage(content=f"Analyzed repository with {len(documents)} files")
+                AIMessage(content=f"Analyzed repository with ~{file_count} files")
             )
 
             return state
