@@ -114,7 +114,8 @@ class TestEmbeddingTool:
         """Create embedding tool instance"""
         return EmbeddingTool()
 
-    def test_similarity_calculation(self, embedding_tool):
+    @pytest.mark.asyncio
+    async def test_similarity_calculation(self, embedding_tool):
         """Test cosine similarity calculation"""
         # Test vectors
         vec1 = [1.0, 0.0, 0.0]
@@ -225,7 +226,8 @@ def standalone_function():
         assert len(structure["classes"]) >= 1  # TestClass
         assert len(structure["imports"]) >= 2  # os, sys
 
-    def test_relevance_score_calculation(self, context_tool):
+    @pytest.mark.asyncio
+    async def test_relevance_score_calculation(self, context_tool):
         """Test relevance score calculation"""
         mock_context = {
             "similarity_score": 0.8,
