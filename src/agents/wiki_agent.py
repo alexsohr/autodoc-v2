@@ -351,6 +351,7 @@ Remember:
         from pathlib import Path
 
         from src.agents.deep_structure_agent import run_structure_agent
+        from src.utils.config_loader import get_settings
 
         try:
             state["current_step"] = "generating_structure"
@@ -377,6 +378,10 @@ Remember:
             owner = repository.org or "unknown"
             repo_name = repository.name or "unknown"
 
+            # Get model from settings
+            settings = get_settings()
+            model = settings.openai_model
+
             # Run the Deep Agent to explore and generate structure
             logger.info(
                 "Running Deep Agent for wiki structure",
@@ -391,6 +396,7 @@ Remember:
                 file_tree=state["file_tree"],
                 readme_content=state["readme_content"],
                 timeout=300.0,  # 5 minute timeout
+                model=model,
             )
 
             if not wiki_structure:
