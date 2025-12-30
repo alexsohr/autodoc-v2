@@ -434,9 +434,9 @@ class WorkflowOrchestrator:
 
             # Store clone_path in Repository
             if processing_result.get("clone_path"):
-                await self._repository_repo.update_one(
-                    {"id": UUID(state["repository_id"])},
-                    {"$set": {"clone_path": processing_result["clone_path"]}}
+                await self._repository_repo.update(
+                    UUID(state["repository_id"]),
+                    {"clone_path": processing_result["clone_path"]}
                 )
 
             # Format documentation files for wiki agent
