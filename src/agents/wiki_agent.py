@@ -277,12 +277,18 @@ Remember:
 - Structure the document logically for easy understanding by other developers."""
 
     async def generate_wiki(
-        self, repository_id: str, force_regenerate: bool = False
+        self,
+        repository_id: str,
+        file_tree: str = "",
+        readme_content: str = "",
+        force_regenerate: bool = False,
     ) -> Dict[str, Any]:
         """Generate complete wiki for repository
 
         Args:
             repository_id: Repository identifier
+            file_tree: ASCII file tree structure from document processing
+            readme_content: Formatted documentation files content
             force_regenerate: Force regeneration even if wiki exists
 
         Returns:
@@ -304,8 +310,8 @@ Remember:
             # Initialize state
             initial_state: WikiGenerationState = {
                 "repository_id": repository_id,
-                "file_tree": "",
-                "readme_content": "",
+                "file_tree": file_tree,
+                "readme_content": readme_content,
                 "wiki_structure": None,
                 "generated_pages": [],
                 "current_page": None,
