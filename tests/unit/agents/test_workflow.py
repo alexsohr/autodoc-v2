@@ -39,3 +39,19 @@ def test_format_documentation_files_empty_list():
     result = orchestrator._format_documentation_files([])
 
     assert result == ""
+
+
+def test_format_documentation_files_missing_keys():
+    """Test formatting with missing path or content keys."""
+    orchestrator = WorkflowOrchestrator.__new__(WorkflowOrchestrator)
+    doc_files = [
+        {"path": "README.md"},  # Missing content
+        {"content": "# Orphan content"},  # Missing path
+        {},  # Both missing
+    ]
+
+    result = orchestrator._format_documentation_files(doc_files)
+
+    assert "--- README.md ---" in result
+    assert "--- unknown ---" in result
+    assert "# Orphan content" in result
