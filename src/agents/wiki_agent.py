@@ -49,11 +49,8 @@ class WikiSectionSchema(BaseModel):
 
     id: str = Field(description="Unique section identifier (URL-friendly)")
     title: str = Field(description="Section title")
-    pages: List[str] = Field(
-        default_factory=list, description="List of page IDs in this section"
-    )
-    subsections: List[str] = Field(
-        default_factory=list, description="List of subsection IDs"
+    pages: List[WikiPageSchema] = Field(
+        default_factory=list, description="List of pages in this section"
     )
 
 
@@ -62,9 +59,7 @@ class WikiStructureSchema(BaseModel):
 
     title: str = Field(description="Overall title for the wiki")
     description: str = Field(description="Brief description of the repository")
-    sections: List[WikiSectionSchema] = Field(description="List of wiki sections")
-    pages: List[WikiPageSchema] = Field(description="List of wiki pages")
-    root_sections: List[str] = Field(description="List of top-level section IDs")
+    sections: List[WikiSectionSchema] = Field(description="List of wiki sections containing pages")
 
 
 class WikiGenerationState(TypedDict):
@@ -364,7 +359,7 @@ Remember:
 
             # Verify repository exists
             repository = await self._repository_repo.find_one(
-                {"id": UUID(state["repository_id"])}
+                {"_id": UUID(state["repository_id"])}
             )
             if not repository:
                 state["error_message"] = "Repository not found"
@@ -387,37 +382,57 @@ Remember:
     async def _generate_structure_node(
         self, state: WikiGenerationState
     ) -> WikiGenerationState:
-        """Generate wiki structure using LLM"""
+        """Generate wiki structure using Deep Agent for repository exploration."""
+        from pathlib import Path
+        from src.agents.deep_structure_agent import run_structure_agent
+
         try:
             state["current_step"] = "generating_structure"
             state["progress"] = 30.0
 
-            # Fetch repository from database to get org and name
+            # Fetch repository from database
             repository = await self._repository_repo.find_one(
-                {"id": UUID(state["repository_id"])}
+                {"_id": UUID(state["repository_id"])}
             )
             if not repository:
                 state["error_message"] = "Repository not found"
                 return state
 
+            # Validate clone_path exists
+            if not repository.clone_path:
+                state["error_message"] = "Repository not cloned - no local path available"
+                return state
+
+            clone_path = Path(repository.clone_path)
+            if not clone_path.exists():
+                state["error_message"] = f"Clone path does not exist: {clone_path}"
+                return state
+
             owner = repository.org or "unknown"
             repo_name = repository.name or "unknown"
 
-            # Prepare structure generation prompt
-            structure_prompt = self.structure_prompt_template.format(
+            # Run the Deep Agent to explore and generate structure
+            logger.info(
+                "Running Deep Agent for wiki structure",
+                repository_id=state["repository_id"],
+                clone_path=str(clone_path),
+            )
+
+            wiki_structure = await run_structure_agent(
+                clone_path=str(clone_path),
                 owner=owner,
                 repo=repo_name,
                 file_tree=state["file_tree"],
                 readme_content=state["readme_content"],
-            )
-
-            # Generate structure using LLM with structured output
-            wiki_structure = await self._generate_structured_wiki_structure(
-                structure_prompt
+                timeout=300.0,  # 5 minute timeout
             )
 
             if not wiki_structure:
-                state["error_message"] = "Failed to parse generated wiki structure"
+                state["error_message"] = "Deep Agent failed to generate wiki structure"
+                return state
+
+            if not wiki_structure.get("pages"):
+                state["error_message"] = "Deep Agent produced empty wiki structure"
                 return state
 
             state["wiki_structure"] = wiki_structure
@@ -426,13 +441,14 @@ Remember:
             # Add success message
             state["messages"].append(
                 AIMessage(
-                    content=f"Generated wiki structure with {len(wiki_structure.get('pages', []))} pages"
+                    content=f"Generated wiki structure with {len(wiki_structure.get('pages', []))} pages using Deep Agent exploration"
                 )
             )
 
             return state
 
         except Exception as e:
+            logger.error(f"Structure generation failed: {e}")
             state["error_message"] = f"Structure generation failed: {str(e)}"
             return state
 
@@ -504,8 +520,8 @@ Remember:
             # Create WikiStructure object
             wiki_data = state["wiki_structure"]
 
-            # Convert pages to WikiPageDetail objects
-            wiki_pages = []
+            # Build a map of page_id -> WikiPageDetail from generated pages
+            pages_map = {}
             for page_data in state["generated_pages"]:
                 page = WikiPageDetail(
                     id=page_data["id"],
@@ -516,28 +532,37 @@ Remember:
                     related_pages=page_data.get("related_pages", []),
                     content=page_data.get("content", ""),
                 )
-                wiki_pages.append(page)
+                pages_map[page.id] = page
 
-            # Convert sections to WikiSection objects
+            # Convert sections to WikiSection objects with embedded pages
             wiki_sections = []
             for section_data in wiki_data.get("sections", []):
+                # Get page objects for this section
+                section_pages = []
+                for page_info in section_data.get("pages", []):
+                    # page_info can be a dict (from structured output) or a string ID
+                    if isinstance(page_info, dict):
+                        page_id = page_info.get("id")
+                    else:
+                        page_id = page_info
+                    
+                    if page_id and page_id in pages_map:
+                        section_pages.append(pages_map[page_id])
+
                 section = WikiSection(
                     id=section_data["id"],
                     title=section_data["title"],
-                    pages=section_data.get("pages", []),
-                    subsections=section_data.get("subsections", []),
+                    pages=section_pages,
                 )
                 wiki_sections.append(section)
 
-            # Create complete wiki structure
+            # Create complete wiki structure (pages are now in sections)
             wiki_structure = WikiStructure(
                 id=f"wiki_{state['repository_id']}",
                 repository_id=state["repository_id"],
                 title=wiki_data["title"],
                 description=wiki_data["description"],
-                pages=wiki_pages,
                 sections=wiki_sections,
-                root_sections=wiki_data.get("root_sections", []),
             )
 
             # Delete existing wiki if force regenerating
@@ -551,9 +576,10 @@ Remember:
             state["progress"] = 100.0
 
             # Add success message
+            total_pages = wiki_structure.get_total_pages()
             state["messages"].append(
                 AIMessage(
-                    content=f"Successfully stored wiki with {len(wiki_pages)} pages"
+                    content=f"Successfully stored wiki with {total_pages} pages in {len(wiki_sections)} sections"
                 )
             )
 
@@ -615,21 +641,6 @@ Remember:
                 return None
 
             wiki_structure = generation_result["structured_output"]
-
-            # Ensure root_sections is populated
-            if not wiki_structure.get("root_sections"):
-                # Find sections that are not subsections of others
-                all_subsection_ids = set()
-                for section in wiki_structure.get("sections", []):
-                    all_subsection_ids.update(section.get("subsections", []))
-
-                root_sections = [
-                    section["id"]
-                    for section in wiki_structure.get("sections", [])
-                    if section["id"] not in all_subsection_ids
-                ]
-                wiki_structure["root_sections"] = root_sections
-
             return wiki_structure
 
         except Exception as e:
