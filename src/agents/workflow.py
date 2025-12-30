@@ -432,12 +432,27 @@ class WorkflowOrchestrator:
                 )
                 return state
 
+            # Store clone_path in Repository
+            if processing_result.get("clone_path"):
+                await self._repository_repo.update_one(
+                    {"id": UUID(state["repository_id"])},
+                    {"$set": {"clone_path": processing_result["clone_path"]}}
+                )
+
+            # Format documentation files for wiki agent
+            doc_files = processing_result.get("documentation_files", [])
+            readme_content = self._format_documentation_files(doc_files)
+
             state["stages_completed"].append("process_documents")
             state["progress"] = 60.0
-            state["results"]["document_processing"] = processing_result
+            state["results"]["document_processing"] = {
+                "file_tree": processing_result.get("file_tree", ""),
+                "readme_content": readme_content,
+                "clone_path": processing_result.get("clone_path"),
+                "documentation_files_count": len(doc_files),
+            }
 
             # Add success message
-            doc_files = processing_result.get("documentation_files", [])
             state["messages"].append(
                 AIMessage(
                     content=f"Processed repository with {len(doc_files)} documentation files"
