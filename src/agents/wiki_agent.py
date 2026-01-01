@@ -7,12 +7,13 @@ wiki-generation-prompts.md.
 
 import asyncio
 import json
-import logging
+import operator
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
+import structlog
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
@@ -24,7 +25,7 @@ from ..repository.wiki_structure_repository import WikiStructureRepository
 from ..tools.context_tool import ContextTool
 from ..tools.llm_tool import LLMTool
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class WikiGenerationState(TypedDict):
@@ -34,13 +35,32 @@ class WikiGenerationState(TypedDict):
     file_tree: str
     readme_content: str
     wiki_structure: Optional[Dict[str, Any]]
-    generated_pages: List[Dict[str, Any]]
+    # CRITICAL: Use Annotated with operator.add for parallel worker result aggregation
+    generated_pages: Annotated[List[Dict[str, Any]], operator.add]
     current_page: Optional[str]
     current_step: str
     error_message: Optional[str]
     progress: float
     start_time: str
     messages: List[BaseMessage]
+    clone_path: Optional[str]  # Path to cloned repository for file access
+
+
+class PageWorkerState(TypedDict):
+    """State for individual page generation worker.
+
+    CRITICAL: This state MUST include `generated_pages` with the SAME
+    Annotated reducer as WikiGenerationState. This is required for
+    LangGraph to properly aggregate results from parallel workers.
+
+    The worker receives this state via Send() and writes its result
+    to generated_pages, which gets merged into the main state.
+    """
+
+    page_info: Dict[str, Any]  # Page definition from wiki_structure
+    clone_path: Optional[str]  # For reading files from disk
+    # MUST match WikiGenerationState for aggregation!
+    generated_pages: Annotated[List[Dict[str, Any]], operator.add]
 
 
 class WikiGenerationAgent:
@@ -284,6 +304,7 @@ Remember:
                         content=f"Generate wiki for repository: {repository_id}"
                     )
                 ],
+                "clone_path": None,  # Will be set in _generate_structure_node
             }
 
             # Execute workflow
@@ -375,6 +396,9 @@ Remember:
                 state["error_message"] = f"Clone path does not exist: {clone_path}"
                 return state
 
+            # IMPORTANT: Set clone_path in state for page workers to access files
+            state["clone_path"] = str(clone_path)
+
             owner = repository.org or "unknown"
             repo_name = repository.name or "unknown"
 
@@ -384,9 +408,7 @@ Remember:
 
             # Run the Deep Agent to explore and generate structure
             logger.info(
-                "Running Deep Agent for wiki structure",
-                repository_id=state["repository_id"],
-                clone_path=str(clone_path),
+                f"Running Deep Agent for wiki structure, repository_id={state['repository_id']}, clone_path={clone_path}"
             )
 
             wiki_structure = await run_structure_agent(
