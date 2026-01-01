@@ -224,7 +224,8 @@ def create_page_agent(
     Returns:
         Configured Deep Agent
     """
-    from deepagents import FilesystemBackend, create_deep_agent
+    from deepagents import create_deep_agent
+    from deepagents.backends import FilesystemBackend
 
     # This will be populated by the finalize tool
     captured_content: Dict[str, Any] = {}
