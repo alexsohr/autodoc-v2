@@ -62,6 +62,8 @@ class PageWorkerState(TypedDict):
 
     page_info: Dict[str, Any]  # Page definition from wiki_structure
     clone_path: Optional[str]  # For reading files from disk
+    repo_name: str  # Repository name for context
+    repo_description: str  # Repository description for context
     # MUST match WikiGenerationState for aggregation!
     generated_pages: Annotated[List[Dict[str, Any]], operator.add]
 
@@ -93,6 +95,11 @@ def fan_out_to_page_workers(state: WikiGenerationState) -> list[Send]:
         logger.error("clone_path not set in state, cannot read files for page generation")
         return []
 
+    # Extract repository context for page agents
+    wiki_structure = state["wiki_structure"]
+    repo_name = wiki_structure.get("title", state.get("repository_id", "unknown"))
+    repo_description = wiki_structure.get("description", "")
+
     sends = []
     for page in pages:
         # Each Send payload becomes the worker's input state
@@ -101,6 +108,8 @@ def fan_out_to_page_workers(state: WikiGenerationState) -> list[Send]:
             Send("page_worker", {
                 "page_info": page,
                 "clone_path": clone_path,
+                "repo_name": repo_name,
+                "repo_description": repo_description,
                 "generated_pages": [],  # Will be populated by worker, then aggregated
             })
         )
@@ -110,25 +119,29 @@ def fan_out_to_page_workers(state: WikiGenerationState) -> list[Send]:
 
 
 async def page_worker_node(state: PageWorkerState) -> Dict[str, Any]:
-    """Generate content for a single wiki page by reading files from disk.
+    """Generate content for a single wiki page using deep agent exploration.
 
     This node runs in parallel for each page via LangGraph's Send API.
-    It reads files using clone_path + file_paths, then generates content.
+    It uses a deep agent with MCP filesystem tools to explore and document.
 
     IMPORTANT: Returns {"generated_pages": [page_result]} which gets
     aggregated with other workers via the operator.add reducer.
 
     Args:
-        state: PageWorkerState with page_info, clone_path, and generated_pages
+        state: PageWorkerState with page_info, clone_path, and repository context
 
     Returns:
         Dict with 'generated_pages' list containing the page with generated content
     """
+    from .deep_page_agent import run_page_agent
     from ..utils.config_loader import get_settings
 
     page_info = state["page_info"]
     clone_path = state.get("clone_path")
-    file_paths = page_info.get("file_paths", [])
+
+    # Get repository context from state
+    repo_name = state.get("repo_name", "unknown")
+    repo_description = state.get("repo_description", "")
 
     # Validate page_info has required fields
     required_keys = ["title", "section", "description", "slug"]
@@ -137,84 +150,66 @@ async def page_worker_node(state: PageWorkerState) -> Dict[str, Any]:
         logger.warning(
             "page_info missing required fields",
             page_title=page_info.get("title", "UNKNOWN"),
-            missing_keys=missing_keys
+            missing_keys=missing_keys,
         )
         return {"generated_pages": []}
 
-    logger.info("Page worker starting", page_title=page_info["title"], num_files=len(file_paths))
-
-    # Read file contents from disk
-    file_contents: Dict[str, str] = {}
-
-    if clone_path and file_paths:
-        for file_path in file_paths[:10]:  # Limit to 10 files per page
-            full_path = os.path.join(clone_path, file_path)
-            try:
-                if os.path.exists(full_path) and os.path.isfile(full_path):
-                    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
-                        content = f.read()
-                        # Limit file size to prevent token overflow
-                        file_contents[file_path] = content[:15000]
-                        logger.debug("Read file", file_path=file_path, chars=len(content))
-                else:
-                    logger.warning("File not found or not a file", full_path=full_path)
-            except Exception as e:
-                logger.warning("Failed to read file", file_path=file_path, error=str(e))
-
-    if not file_contents:
-        logger.warning("No file contents available for page", page_title=page_info["title"])
-        # Return page without content - will be skipped or show placeholder
+    if not clone_path:
+        logger.error("No clone_path provided for page worker", page_title=page_info["title"])
         return {"generated_pages": []}
 
-    # Build prompt with file contents
-    files_markdown = "\n\n".join([
-        f"### File: {path}\n```\n{content[:8000]}\n```"
-        for path, content in file_contents.items()
-    ])
-
-    prompt = f"""Generate comprehensive wiki documentation for this page.
-
-## Page Information
-- **Title:** {page_info['title']}
-- **Section:** {page_info['section']}
-- **Description:** {page_info['description']}
-
-## Source Files
-{files_markdown}
-
-## Requirements
-1. Write clear, professional technical documentation in Markdown
-2. Include code examples extracted from the source files
-3. Explain the purpose and usage of each component
-4. Use proper headings, lists, and code blocks
-5. Be comprehensive but concise
-6. Do NOT include a title heading (it will be added automatically)
-
-Generate the page content now:
-"""
+    logger.info(
+        "Page worker starting with deep agent",
+        page_title=page_info["title"],
+        num_file_hints=len(page_info.get("file_paths", [])),
+    )
 
     try:
         settings = get_settings()
-        llm = ChatOpenAI(model=settings.openai_model, temperature=0)
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
 
-        # Build result page
-        page_result = {
-            "title": page_info["title"],
-            "slug": page_info["slug"],
-            "section": page_info["section"],
-            "description": page_info["description"],
-            "file_paths": page_info.get("file_paths", []),
-            "content": response.content,
-        }
+        # Run deep page agent
+        result = await run_page_agent(
+            clone_path=clone_path,
+            page_title=page_info["title"],
+            page_description=page_info.get("description", ""),
+            file_hints=page_info.get("file_paths", []),
+            repo_name=repo_name,
+            repo_description=repo_description,
+            timeout=120.0,  # 2 minutes per page
+            model=settings.openai_model,
+        )
 
-        logger.info("Generated content for page", page_title=page_info["title"], content_chars=len(response.content))
+        if result and result.get("content"):
+            page_result = {
+                "title": page_info["title"],
+                "slug": page_info["slug"],
+                "section": page_info["section"],
+                "description": page_info["description"],
+                "file_paths": result.get("source_files", page_info.get("file_paths", [])),
+                "content": result["content"],
+            }
 
-        # Return in format for aggregation via operator.add
-        return {"generated_pages": [page_result]}
+            logger.info(
+                "Deep agent generated content for page",
+                page_title=page_info["title"],
+                content_chars=len(result["content"]),
+                source_files=len(result.get("source_files", [])),
+            )
+
+            return {"generated_pages": [page_result]}
+        else:
+            logger.warning(
+                "Deep agent returned no content for page",
+                page_title=page_info["title"],
+            )
+            return {"generated_pages": []}
 
     except Exception as e:
-        logger.error("Failed to generate page", page_title=page_info["title"], error=str(e))
+        logger.error(
+            "Failed to generate page with deep agent",
+            page_title=page_info["title"],
+            error=str(e),
+        )
         return {"generated_pages": []}
 
 
