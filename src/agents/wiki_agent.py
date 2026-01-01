@@ -408,7 +408,9 @@ Remember:
 
             # Run the Deep Agent to explore and generate structure
             logger.info(
-                f"Running Deep Agent for wiki structure, repository_id={state['repository_id']}, clone_path={clone_path}"
+                "Running Deep Agent for wiki structure",
+                repository_id=state["repository_id"],
+                clone_path=str(clone_path),
             )
 
             wiki_structure = await run_structure_agent(
