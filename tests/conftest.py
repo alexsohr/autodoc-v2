@@ -87,8 +87,11 @@ def client(test_app) -> Generator[TestClient, None, None]:
 @pytest.fixture
 async def async_client(test_app) -> AsyncGenerator[AsyncClient, None]:
     """Create an async test client for the FastAPI application."""
+    from httpx import ASGITransport
+
+    transport = ASGITransport(app=test_app)
     async with AsyncClient(
-        app=test_app, base_url="http://testserver"
+        transport=transport, base_url="http://testserver"
     ) as async_test_client:
         yield async_test_client
 
@@ -110,26 +113,23 @@ def sample_wiki_data():
         "id": "test-wiki-1",
         "title": "Test Repository Documentation",
         "description": "Documentation for the test repository",
-        "pages": [
-            {
-                "id": "overview",
-                "title": "Overview",
-                "description": "Project overview and architecture",
-                "importance": "high",
-                "file_paths": ["README.md", "docs/overview.md"],
-                "related_pages": ["getting-started"],
-                "content": "# Overview\n\nThis is a test repository...",
-            }
-        ],
         "sections": [
             {
                 "id": "getting-started",
                 "title": "Getting Started",
-                "pages": ["overview"],
-                "subsections": [],
+                "pages": [
+                    {
+                        "id": "overview",
+                        "title": "Overview",
+                        "description": "Project overview and architecture",
+                        "importance": "high",
+                        "file_paths": ["README.md", "docs/overview.md"],
+                        "related_pages": [],
+                        "content": "# Overview\n\nThis is a test repository...",
+                    }
+                ],
             }
         ],
-        "root_sections": ["getting-started"],
     }
 
 

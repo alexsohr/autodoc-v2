@@ -296,21 +296,34 @@ class TestWikiModels:
 
     def test_wiki_section_creation(self):
         """Test wiki section creation"""
+        pages = [
+            WikiPageDetail(
+                id="overview",
+                title="Overview",
+                description="Project overview",
+                importance=PageImportance.HIGH,
+            ),
+            WikiPageDetail(
+                id="getting-started",
+                title="Getting Started",
+                description="Setup guide",
+                importance=PageImportance.HIGH,
+            ),
+        ]
         section = WikiSection(
             id="introduction",
             title="Introduction",
-            pages=["overview", "getting-started"],
-            subsections=["advanced"],
+            pages=pages,
         )
 
         assert section.id == "introduction"
         assert section.title == "Introduction"
         assert section.has_pages() is True
-        assert section.has_subsections() is True
+        assert section.get_total_pages() == 2
 
     def test_wiki_structure_validation(self):
         """Test wiki structure validation"""
-        # Create valid structure
+        # Create valid structure with pages embedded in sections
         pages = [
             WikiPageDetail(
                 id="overview",
@@ -331,7 +344,7 @@ class TestWikiModels:
             WikiSection(
                 id="introduction",
                 title="Introduction",
-                pages=["overview", "getting-started"],
+                pages=pages,
             )
         ]
 
@@ -340,12 +353,9 @@ class TestWikiModels:
             repository_id=uuid4(),
             title="Test Wiki",
             description="Test wiki structure",
-            pages=pages,
             sections=sections,
-            root_sections=["introduction"],
         )
 
-        assert len(wiki.pages) == 2
         assert len(wiki.sections) == 1
         assert wiki.get_total_pages() == 2
         assert wiki.get_page("overview") is not None
@@ -353,13 +363,14 @@ class TestWikiModels:
 
     def test_wiki_structure_validation_errors(self):
         """Test wiki structure validation errors"""
-        # Invalid structure - reference to non-existent page
-        pages = [
+        # Invalid structure - related_pages references non-existent page
+        pages_with_invalid_ref = [
             WikiPageDetail(
                 id="overview",
                 title="Overview",
                 description="Project overview",
                 importance=PageImportance.HIGH,
+                related_pages=["non-existent-page"],  # Invalid reference
             )
         ]
 
@@ -367,7 +378,7 @@ class TestWikiModels:
             WikiSection(
                 id="introduction",
                 title="Introduction",
-                pages=["overview", "non-existent-page"],  # Invalid reference
+                pages=pages_with_invalid_ref,
             )
         ]
 
@@ -377,9 +388,7 @@ class TestWikiModels:
                 repository_id=uuid4(),
                 title="Test Wiki",
                 description="Test wiki structure",
-                pages=pages,
                 sections=sections,
-                root_sections=["introduction"],
             )
 
 
@@ -593,24 +602,25 @@ class TestModelSerialization:
             importance=PageImportance.HIGH,
         )
 
-        section = WikiSection(id="intro", title="Introduction", pages=["overview"])
+        # WikiSection.pages now expects List[WikiPageDetail] objects, not strings
+        section = WikiSection(id="intro", title="Introduction", pages=[page])
 
+        # WikiStructure now only has sections with embedded pages
         wiki = WikiStructure(
             id="wiki1",
             repository_id=uuid4(),
             title="Test Wiki",
             description="Test description",
-            pages=[page],
             sections=[section],
-            root_sections=["intro"],
         )
 
         # Test serialization
         wiki_dict = wiki.model_dump()
         assert isinstance(wiki_dict, dict)
         assert wiki_dict["title"] == "Test Wiki"
-        assert len(wiki_dict["pages"]) == 1
         assert len(wiki_dict["sections"]) == 1
+        # Pages are now inside sections
+        assert len(wiki_dict["sections"][0]["pages"]) == 1
 
     def test_chat_models_serialization(self):
         """Test chat models serialization"""
