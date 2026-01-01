@@ -122,10 +122,30 @@ You have access to the following tools to explore the codebase:
 
 All paths must be absolute, starting with: {clone_path}
 
-Example usage:
-- read_text_file(path="{clone_path}/src/main.py", head=50)
-- search_files(path="{clone_path}/src", pattern="*.py")
-- list_directory(path="{clone_path}/src")
+### Context-Efficient Reading (IMPORTANT)
+To minimize context usage and improve efficiency, follow this reading strategy:
+
+1. **Read File Headers First (50 lines)**
+   Use `read_text_file` with `head=50` to read only the first 50 lines:
+   ```
+   read_text_file(path="{clone_path}/src/main.py", head=50)
+   ```
+   The first 50 lines typically contain imports, docstrings, and class/function signatures -
+   enough to understand the file's purpose without loading full content.
+
+2. **Read More Only When Needed**
+   If 50 lines aren't enough to understand a file:
+   - Use `head=100` or `head=150` for larger files
+   - Only read full files for small config files (< 50 lines anyway)
+
+3. **Use search_files for Discovery**
+   Find related files by pattern:
+   ```
+   search_files(path="{clone_path}", pattern="**/*controller*.py")
+   search_files(path="{clone_path}", pattern="**/test_*.py")
+   ```
+
+IMPORTANT: Always use absolute paths starting with "{clone_path}/" when accessing files.
 """
 
     return f'''You are an expert technical writer and software architect.
@@ -380,13 +400,26 @@ async def run_page_agent(
         mcp_tools=mcp_tools,
     )
 
-    # Build the user message
-    user_message = (
-        f"Generate comprehensive wiki documentation for: {page_title}\n\n"
-        f"Start by exploring the hinted files, then search for related code. "
-        f"You MUST use at least 5 source files and cite them with line numbers. "
-        f"When done, call finalize_page with your complete documentation."
-    )
+    # Build the user message with clone path for MCP tools
+    if mcp_tools:
+        user_message = (
+            f"Generate comprehensive wiki documentation for: {page_title}\n\n"
+            f"The repository is located at: {clone_path}\n\n"
+            f"CONTEXT-EFFICIENT EXPLORATION:\n"
+            f"- Use `read_text_file` with `head=50` to read only file headers first\n"
+            f"- Example: read_text_file(path='{clone_path}/src/main.py', head=50)\n"
+            f"- Only read more if 50 lines aren't enough to understand the file's purpose\n"
+            f"- Use `search_files` to discover related files by pattern\n\n"
+            f"You MUST use at least 5 source files and cite them with line numbers. "
+            f"When done, call finalize_page with your complete documentation."
+        )
+    else:
+        user_message = (
+            f"Generate comprehensive wiki documentation for: {page_title}\n\n"
+            f"Start by exploring the hinted files, then search for related code. "
+            f"You MUST use at least 5 source files and cite them with line numbers. "
+            f"When done, call finalize_page with your complete documentation."
+        )
 
     # Wrap with traceable for LangSmith visibility
     safe_title = page_title.replace(" ", "_").replace("/", "_")[:30]

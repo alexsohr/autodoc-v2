@@ -6,6 +6,7 @@ for repository analysis.
 """
 
 import asyncio
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -79,10 +80,25 @@ class MCPFilesystemClient:
                 return True
 
             try:
+                # Build args list, automatically including storage path for repo access
+                args = self._settings.mcp_filesystem_args_list.copy()
+                
+                # Add the storage base path (where repos are cloned) to allowed directories
+                storage_path = Path(self._settings.storage_base_path).resolve()
+                if storage_path.exists():
+                    # Add as absolute path for MCP server access control
+                    storage_path_str = str(storage_path)
+                    if storage_path_str not in args:
+                        args.append(storage_path_str)
+                        logger.info(
+                            "Added storage path to MCP allowed directories",
+                            path=storage_path_str,
+                        )
+
                 logger.info(
                     "Initializing MCP filesystem client",
                     command=self._settings.mcp_filesystem_command,
-                    args=self._settings.mcp_filesystem_args_list,
+                    args=args,
                 )
 
                 self._client = MultiServerMCPClient(
@@ -90,7 +106,7 @@ class MCPFilesystemClient:
                         "filesystem": {
                             "transport": "stdio",
                             "command": self._settings.mcp_filesystem_command,
-                            "args": self._settings.mcp_filesystem_args_list,
+                            "args": args,
                         }
                     }
                 )
@@ -159,17 +175,11 @@ class MCPFilesystemClient:
     async def list_directory(
         self,
         path: str,
-        recursive: bool = False,
-        page: int = 1,
-        page_size: int = 100,
     ) -> Dict[str, Any]:
-        """List directory contents using fast_list_directory.
+        """List directory contents using list_directory.
 
         Args:
             path: The directory path to list.
-            recursive: Whether to list recursively.
-            page: Page number for pagination.
-            page_size: Number of items per page.
 
         Returns:
             Dictionary with directory listing results.
@@ -178,12 +188,9 @@ class MCPFilesystemClient:
             raise ValueError("MCP filesystem client not initialized")
 
         try:
-            tool = self._get_tool("fast_list_directory")
+            tool = self._get_tool("list_directory")
             result = await tool.ainvoke({
                 "path": path,
-                "recursive": recursive,
-                "page": page,
-                "pageSize": page_size,
             })
             return {"status": "success", "data": result}
         except Exception as e:
@@ -191,7 +198,7 @@ class MCPFilesystemClient:
             return {"status": "error", "error": str(e)}
 
     async def read_file(self, path: str) -> Dict[str, Any]:
-        """Read file contents using fast_read_file.
+        """Read file contents using read_text_file.
 
         Args:
             path: The file path to read.
@@ -203,7 +210,7 @@ class MCPFilesystemClient:
             raise ValueError("MCP filesystem client not initialized")
 
         try:
-            tool = self._get_tool("fast_read_file")
+            tool = self._get_tool("read_text_file")
             result = await tool.ainvoke({"path": path})
             return {"status": "success", "content": result}
         except Exception as e:
@@ -211,7 +218,7 @@ class MCPFilesystemClient:
             return {"status": "error", "error": str(e)}
 
     async def get_file_info(self, path: str) -> Dict[str, Any]:
-        """Get file information using fast_get_file_info.
+        """Get file information using get_file_info.
 
         Args:
             path: The file path to get info for.
@@ -223,7 +230,7 @@ class MCPFilesystemClient:
             raise ValueError("MCP filesystem client not initialized")
 
         try:
-            tool = self._get_tool("fast_get_file_info")
+            tool = self._get_tool("get_file_info")
             result = await tool.ainvoke({"path": path})
             return {"status": "success", "info": result}
         except Exception as e:
@@ -233,13 +240,11 @@ class MCPFilesystemClient:
     async def get_directory_tree(
         self,
         path: str,
-        max_depth: int = 5,
     ) -> Dict[str, Any]:
-        """Get directory tree using fast_get_directory_tree.
+        """Get directory tree using directory_tree.
 
         Args:
             path: The root path for the tree.
-            max_depth: Maximum depth to traverse.
 
         Returns:
             Dictionary with directory tree structure.
@@ -248,10 +253,9 @@ class MCPFilesystemClient:
             raise ValueError("MCP filesystem client not initialized")
 
         try:
-            tool = self._get_tool("fast_get_directory_tree")
+            tool = self._get_tool("directory_tree")
             result = await tool.ainvoke({
                 "path": path,
-                "maxDepth": max_depth,
             })
             return {"status": "success", "tree": result}
         except Exception as e:
@@ -262,14 +266,12 @@ class MCPFilesystemClient:
         self,
         path: str,
         pattern: str,
-        recursive: bool = True,
     ) -> Dict[str, Any]:
-        """Search for files by name pattern using fast_search_files.
+        """Search for files by name pattern using search_files.
 
         Args:
             path: The directory to search in.
             pattern: The file name pattern (glob-style).
-            recursive: Whether to search recursively.
 
         Returns:
             Dictionary with matching files.
@@ -278,11 +280,10 @@ class MCPFilesystemClient:
             raise ValueError("MCP filesystem client not initialized")
 
         try:
-            tool = self._get_tool("fast_search_files")
+            tool = self._get_tool("search_files")
             result = await tool.ainvoke({
                 "path": path,
                 "pattern": pattern,
-                "recursive": recursive,
             })
             return {"status": "success", "files": result}
         except Exception as e:
@@ -294,41 +295,29 @@ class MCPFilesystemClient:
             )
             return {"status": "error", "error": str(e)}
 
-    async def search_code(
+    async def read_multiple_files(
         self,
-        path: str,
-        pattern: str,
-        file_pattern: Optional[str] = None,
+        paths: List[str],
     ) -> Dict[str, Any]:
-        """Search for code patterns using fast_search_code.
+        """Read multiple files simultaneously using read_multiple_files.
 
         Args:
-            path: The directory to search in.
-            pattern: The code pattern to search for.
-            file_pattern: Optional file pattern filter.
+            paths: List of file paths to read.
 
         Returns:
-            Dictionary with matching code locations.
+            Dictionary with file contents.
         """
         if not self._initialized:
             raise ValueError("MCP filesystem client not initialized")
 
         try:
-            tool = self._get_tool("fast_search_code")
-            params: Dict[str, Any] = {
-                "path": path,
-                "pattern": pattern,
-            }
-            if file_pattern:
-                params["filePattern"] = file_pattern
-
-            result = await tool.ainvoke(params)
-            return {"status": "success", "matches": result}
+            tool = self._get_tool("read_multiple_files")
+            result = await tool.ainvoke({"paths": paths})
+            return {"status": "success", "contents": result}
         except Exception as e:
             logger.error(
-                "Error searching code",
-                path=path,
-                pattern=pattern,
+                "Error reading multiple files",
+                paths=paths,
                 error=str(e),
             )
             return {"status": "error", "error": str(e)}
@@ -357,7 +346,7 @@ class MCPFilesystemClient:
 
         try:
             # Use directory tree for efficient discovery
-            tree_result = await self.get_directory_tree(path, max_depth=10)
+            tree_result = await self.get_directory_tree(path)
 
             if tree_result["status"] != "success":
                 return tree_result

@@ -215,7 +215,6 @@ class TestDocumentationAPIContract:
             "description": str,
             "pages": list,  # List of WikiPageDetail objects
             "sections": list,  # List of WikiSection objects
-            "root_sections": list,  # List of section IDs
         }
 
         # For now, just assert the schema structure is defined

@@ -77,13 +77,13 @@ def wiki_structure_should_contain_sections(context):
 
 @then("the wiki structure should contain root sections")
 def wiki_structure_should_contain_root_sections(context):
-    """Assert the wiki structure contains root sections."""
+    """Assert the wiki structure contains sections (root_sections deprecated)."""
     response = context.get("response")
     assert response is not None, "No response in context"
     
     data = response.json()
-    assert "root_sections" in data, (
-        f"Wiki structure should contain 'root_sections': {data}"
+    assert "sections" in data, (
+        f"Wiki structure should contain 'sections': {data}"
     )
 
 

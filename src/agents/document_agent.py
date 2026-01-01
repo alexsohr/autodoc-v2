@@ -8,6 +8,7 @@ import fnmatch
 import json
 import logging
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
@@ -129,6 +130,44 @@ class DocumentProcessingAgent:
         # Handle simple wildcard patterns
         return fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(os.path.basename(path), pattern)
 
+    def _load_exclusion_patterns(self, clone_path: Optional[str]) -> tuple[List[str], List[str]]:
+        """Load exclusion patterns from config and optional .autodoc/autodoc.json override.
+
+        This helper loads patterns internally so nodes don't need to pass patterns
+        through state between workflow steps.
+
+        Args:
+            clone_path: Path to the cloned repository.
+
+        Returns:
+            Tuple of (excluded_dirs, excluded_files).
+        """
+        # Start with defaults from config
+        excluded_dirs = list(self.settings.default_excluded_dirs)
+        excluded_files = list(self.settings.default_excluded_files)
+
+        # Check for .autodoc/autodoc.json override
+        if clone_path:
+            autodoc_config_path = Path(clone_path) / ".autodoc" / "autodoc.json"
+            if autodoc_config_path.exists():
+                try:
+                    with open(autodoc_config_path, "r", encoding="utf-8") as f:
+                        autodoc_config = json.load(f)
+
+                    # Override with values from autodoc.json if present
+                    if "excluded_dirs" in autodoc_config:
+                        excluded_dirs = autodoc_config["excluded_dirs"]
+                        logger.info("Loaded excluded_dirs from .autodoc/autodoc.json")
+                    if "excluded_files" in autodoc_config:
+                        excluded_files = autodoc_config["excluded_files"]
+                        logger.info("Loaded excluded_files from .autodoc/autodoc.json")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Invalid .autodoc/autodoc.json: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to read .autodoc/autodoc.json: {e}")
+
+        return excluded_dirs, excluded_files
+
     def _build_file_tree(
         self, root_path: str, excluded_dirs: List[str], excluded_files: List[str]
     ) -> str:
@@ -193,6 +232,13 @@ class DocumentProcessingAgent:
     def _create_workflow(self) -> StateGraph:
         """Create the document processing workflow graph.
 
+        Workflow order:
+        1. clone_repository - Clone the repository
+        2. build_tree - Build file tree (loads patterns internally)
+        3. extract_docs - Extract documentation files
+        4. load_patterns - Load patterns into state for cleanup
+        5. cleanup_excluded - Physically delete excluded files/dirs
+
         Returns:
             LangGraph StateGraph for document processing.
         """
@@ -200,17 +246,19 @@ class DocumentProcessingAgent:
 
         # Add nodes
         workflow.add_node("clone_repository", self._clone_repository_node)
-        workflow.add_node("load_patterns", self._load_patterns_node)
         workflow.add_node("build_tree", self._discover_and_build_tree_node)
         workflow.add_node("extract_docs", self._extract_docs_node)
+        workflow.add_node("load_patterns", self._load_patterns_node)
+        workflow.add_node("cleanup_excluded", self._cleanup_excluded_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        # Define workflow edges
+        # Define workflow edges - new order
         workflow.add_edge(START, "clone_repository")
-        workflow.add_edge("clone_repository", "load_patterns")
-        workflow.add_edge("load_patterns", "build_tree")
+        workflow.add_edge("clone_repository", "build_tree")
         workflow.add_edge("build_tree", "extract_docs")
-        workflow.add_edge("extract_docs", END)
+        workflow.add_edge("extract_docs", "load_patterns")
+        workflow.add_edge("load_patterns", "cleanup_excluded")
+        workflow.add_edge("cleanup_excluded", END)
 
         # Error handling
         workflow.add_edge("handle_error", END)
@@ -299,40 +347,23 @@ class DocumentProcessingAgent:
     async def _load_patterns_node(
         self, state: DocumentProcessingState
     ) -> DocumentProcessingState:
-        """Load exclusion patterns from config and optional .autodoc/autodoc.json override."""
+        """Load exclusion patterns into state for cleanup step.
+        
+        This node runs after extract_docs and before cleanup_excluded.
+        The patterns are loaded into state for the cleanup node to use.
+        """
         try:
             state["current_step"] = "loading_patterns"
-            state["progress"] = 25.0
+            state["progress"] = 80.0
 
-            # Start with defaults from config
-            excluded_dirs = list(self.settings.default_excluded_dirs)
-            excluded_files = list(self.settings.default_excluded_files)
-
-            # Check for .autodoc/autodoc.json override
-            if state["clone_path"]:
-                autodoc_config_path = Path(state["clone_path"]) / ".autodoc" / "autodoc.json"
-                if autodoc_config_path.exists():
-                    try:
-                        with open(autodoc_config_path, "r", encoding="utf-8") as f:
-                            autodoc_config = json.load(f)
-
-                        # Override with values from autodoc.json if present
-                        if "excluded_dirs" in autodoc_config:
-                            excluded_dirs = autodoc_config["excluded_dirs"]
-                            logger.info(f"Loaded excluded_dirs from .autodoc/autodoc.json")
-                        if "excluded_files" in autodoc_config:
-                            excluded_files = autodoc_config["excluded_files"]
-                            logger.info(f"Loaded excluded_files from .autodoc/autodoc.json")
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Invalid .autodoc/autodoc.json: {e}")
-                    except Exception as e:
-                        logger.warning(f"Failed to read .autodoc/autodoc.json: {e}")
+            # Load patterns using helper
+            excluded_dirs, excluded_files = self._load_exclusion_patterns(state["clone_path"])
 
             state["excluded_dirs"] = excluded_dirs
             state["excluded_files"] = excluded_files
 
             state["messages"].append(
-                AIMessage(content=f"Loaded {len(excluded_dirs)} dir exclusions and {len(excluded_files)} file exclusions")
+                AIMessage(content=f"Loaded {len(excluded_dirs)} dir exclusions and {len(excluded_files)} file exclusions for cleanup")
             )
 
             return state
@@ -344,24 +375,30 @@ class DocumentProcessingAgent:
     async def _discover_and_build_tree_node(
         self, state: DocumentProcessingState
     ) -> DocumentProcessingState:
-        """Discover files and build ASCII tree structure."""
+        """Discover files and build ASCII tree structure.
+        
+        Loads exclusion patterns internally - does not require patterns from state.
+        """
         try:
             state["current_step"] = "building_tree"
-            state["progress"] = 40.0
+            state["progress"] = 25.0
 
             if not state["clone_path"]:
                 state["error_message"] = "No clone path available for tree building"
                 return state
 
+            # Load patterns internally (not from state)
+            excluded_dirs, excluded_files = self._load_exclusion_patterns(state["clone_path"])
+
             # Build the file tree
             file_tree = self._build_file_tree(
                 state["clone_path"],
-                state["excluded_dirs"],
-                state["excluded_files"]
+                excluded_dirs,
+                excluded_files
             )
 
             state["file_tree"] = file_tree
-            state["progress"] = 50.0
+            state["progress"] = 40.0
 
             # Count lines for message
             line_count = len(file_tree.split("\n")) if file_tree else 0
@@ -438,6 +475,88 @@ class DocumentProcessingAgent:
 
         except Exception as e:
             state["error_message"] = f"Extract docs node failed: {str(e)}"
+            return state
+
+    async def _cleanup_excluded_node(
+        self, state: DocumentProcessingState
+    ) -> DocumentProcessingState:
+        """Physically delete excluded files and directories from cloned repository.
+        
+        This node runs after load_patterns and uses the patterns from state.
+        The cleanup makes the repo ready for Wiki Agent's file searches.
+        """
+        try:
+            state["current_step"] = "cleanup_excluded"
+            state["progress"] = 90.0
+
+            if not state["clone_path"]:
+                state["error_message"] = "No clone path available for cleanup"
+                return state
+
+            root = Path(state["clone_path"])
+            excluded_dirs = state.get("excluded_dirs", [])
+            excluded_files = state.get("excluded_files", [])
+
+            deleted_dirs = 0
+            deleted_files = 0
+
+            # Helper to check if directory should be excluded
+            def should_exclude_dir(dir_path: Path) -> bool:
+                rel_path = str(dir_path.relative_to(root)).replace("\\", "/") + "/"
+                dir_name = dir_path.name + "/"
+                for pattern in excluded_dirs:
+                    pattern = pattern.replace("\\", "/")
+                    if self._matches_pattern(rel_path, pattern) or self._matches_pattern(dir_name, pattern):
+                        return True
+                return False
+
+            # Helper to check if file should be excluded
+            def should_exclude_file(file_path: Path) -> bool:
+                rel_path = str(file_path.relative_to(root)).replace("\\", "/")
+                file_name = file_path.name
+                for pattern in excluded_files:
+                    if self._matches_pattern(rel_path, pattern) or self._matches_pattern(file_name, pattern):
+                        return True
+                return False
+
+            # Collect directories to delete (deepest first to avoid issues)
+            dirs_to_delete = []
+            for dir_path in root.rglob("*"):
+                if dir_path.is_dir() and should_exclude_dir(dir_path):
+                    dirs_to_delete.append(dir_path)
+
+            # Sort by depth (deepest first)
+            dirs_to_delete.sort(key=lambda p: len(p.parts), reverse=True)
+
+            # Delete directories
+            for dir_path in dirs_to_delete:
+                try:
+                    if dir_path.exists():
+                        shutil.rmtree(dir_path)
+                        deleted_dirs += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete directory {dir_path}: {e}")
+
+            # Collect and delete files
+            for file_path in root.rglob("*"):
+                if file_path.is_file() and should_exclude_file(file_path):
+                    try:
+                        file_path.unlink()
+                        deleted_files += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to delete file {file_path}: {e}")
+
+            state["current_step"] = "success"
+            state["progress"] = 100.0
+
+            state["messages"].append(
+                AIMessage(content=f"Cleanup complete: deleted {deleted_dirs} directories and {deleted_files} files")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Cleanup node failed: {str(e)}"
             return state
 
     async def _clone_repository_node(

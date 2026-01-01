@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     )
     debug: bool = Field(default=True, description="Debug mode")
     log_level: str = Field(default="INFO", description="Log level")
+    log_dir: str = Field(default="logs", description="Log directory path")
 
     # API settings
     api_host: str = Field(default="0.0.0.0", description="API host")
@@ -234,8 +235,8 @@ class Settings(BaseSettings):
         default="npx", description="MCP filesystem server command"
     )
     mcp_filesystem_args: str = Field(
-        default="-y,fast-filesystem-mcp",
-        description="MCP filesystem server arguments (comma-separated)",
+        default="-y,@modelcontextprotocol/server-filesystem",
+        description="MCP filesystem server arguments (comma-separated). Allowed directories are appended automatically.",
     )
 
     @property
@@ -313,6 +314,21 @@ class Settings(BaseSettings):
         else:
             # Disable tracing if not configured
             os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
+    def configure_llm_environment(self) -> None:
+        """Export LLM provider API keys to environment variables.
+        
+        Required because init_chat_model() and other LangChain utilities
+        look for API keys in os.environ, not in Settings attributes.
+        Pydantic BaseSettings reads .env into object attributes but does
+        not automatically export them to os.environ.
+        """
+        import os
+        
+        if self.openai_api_key:
+            os.environ["OPENAI_API_KEY"] = self.openai_api_key
+        if self.google_api_key:
+            os.environ["GOOGLE_API_KEY"] = self.google_api_key
 
     @property
     def is_langsmith_enabled(self) -> bool:

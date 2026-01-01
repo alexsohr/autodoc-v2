@@ -31,6 +31,7 @@ class AutoDocLogger:
         self.log_level = self.settings.log_level.upper()
         self.environment = self.settings.environment
         self.debug = self.settings.debug
+        self.log_dir = self.settings.log_dir
 
         # Configure logging
         self._setup_standard_logging()
@@ -39,24 +40,39 @@ class AutoDocLogger:
     def _setup_standard_logging(self) -> None:
         """Setup standard Python logging configuration"""
 
+        # Check if pythonjsonlogger is available
+        try:
+            import pythonjsonlogger  # noqa: F401
+            has_json_logger = True
+        except ImportError:
+            has_json_logger = False
+
         # Logging configuration
+        formatters = {
+            "standard": {
+                "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+            "detailed": {
+                "format": "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d: %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+        }
+
+        # Add JSON formatter only if pythonjsonlogger is available
+        if has_json_logger:
+            formatters["json"] = {
+                "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+                "format": "%(asctime)s %(name)s %(levelname)s %(message)s",
+            }
+
+        # Use detailed formatter as fallback for file handlers if JSON not available
+        file_formatter = "json" if has_json_logger and not self.debug else "detailed"
+
         logging_config = {
             "version": 1,
             "disable_existing_loggers": False,
-            "formatters": {
-                "standard": {
-                    "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-                    "datefmt": "%Y-%m-%d %H:%M:%S",
-                },
-                "detailed": {
-                    "format": "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d: %(message)s",
-                    "datefmt": "%Y-%m-%d %H:%M:%S",
-                },
-                "json": {
-                    "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
-                    "format": "%(asctime)s %(name)s %(levelname)s %(message)s",
-                },
-            },
+            "formatters": formatters,
             "handlers": {
                 "console": {
                     "class": "logging.StreamHandler",
@@ -67,8 +83,8 @@ class AutoDocLogger:
                 "file": {
                     "class": "logging.handlers.RotatingFileHandler",
                     "level": self.log_level,
-                    "formatter": "json" if not self.debug else "detailed",
-                    "filename": "logs/autodoc.log",
+                    "formatter": file_formatter,
+                    "filename": os.path.join(self.log_dir, "autodoc.log"),
                     "maxBytes": 10485760,  # 10MB
                     "backupCount": 5,
                     "encoding": "utf8",
@@ -76,8 +92,8 @@ class AutoDocLogger:
                 "error_file": {
                     "class": "logging.handlers.RotatingFileHandler",
                     "level": "ERROR",
-                    "formatter": "json",
-                    "filename": "logs/autodoc_errors.log",
+                    "formatter": file_formatter,
+                    "filename": os.path.join(self.log_dir, "autodoc_errors.log"),
                     "maxBytes": 10485760,  # 10MB
                     "backupCount": 10,
                     "encoding": "utf8",
@@ -118,7 +134,7 @@ class AutoDocLogger:
         }
 
         # Create logs directory if it doesn't exist
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(self.log_dir, exist_ok=True)
 
         # Apply configuration
         logging.config.dictConfig(logging_config)
@@ -233,10 +249,11 @@ class AutoDocLogger:
             "log_level": self.log_level,
             "environment": self.environment,
             "debug": self.debug,
+            "log_dir": self.log_dir,
             "structured_logging": True,
             "log_files": {
-                "main": "logs/autodoc.log",
-                "errors": "logs/autodoc_errors.log",
+                "main": os.path.join(self.log_dir, "autodoc.log"),
+                "errors": os.path.join(self.log_dir, "autodoc_errors.log"),
             },
             "external_loggers_configured": True,
         }

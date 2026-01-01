@@ -308,7 +308,14 @@ class RepositoryService:
                 }
 
             # Check if analysis is already in progress
-            if repository.analysis_status == AnalysisStatus.PROCESSING and not force:
+            # Note: analysis_status may be string or enum depending on use_enum_values setting
+            current_status = (
+                repository.analysis_status.value
+                if hasattr(repository.analysis_status, "value")
+                else repository.analysis_status
+            )
+
+            if current_status == AnalysisStatus.PROCESSING.value and not force:
                 return {
                     "status": "error",
                     "error": "Analysis already in progress",
@@ -316,11 +323,11 @@ class RepositoryService:
                 }
 
             # Check if analysis is completed and force is not set
-            if repository.analysis_status == AnalysisStatus.COMPLETED and not force:
+            if current_status == AnalysisStatus.COMPLETED.value and not force:
                 return {
                     "status": "success",
                     "message": "Repository already analyzed",
-                    "analysis_status": repository.analysis_status.value,
+                    "analysis_status": current_status,
                     "last_analyzed": (
                         repository.last_analyzed.isoformat()
                         if repository.last_analyzed

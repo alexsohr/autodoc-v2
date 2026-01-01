@@ -140,3 +140,41 @@ class TestDeepStructureAgent:
         assert "├── src/" in prompt
         assert "# My Project" in prompt
         assert "finalize_wiki_structure" in prompt
+
+    def test_get_structure_prompt_mcp_includes_head_parameter(self):
+        """Test that MCP mode prompt instructs agent to use head=50."""
+        from src.agents.deep_structure_agent import get_structure_prompt
+
+        prompt = get_structure_prompt(
+            owner="test-org",
+            repo="test-repo",
+            file_tree="├── src/",
+            readme_content="# Test",
+            clone_path="/test/path",
+            use_mcp_tools=True,
+        )
+
+        # Verify context-efficient exploration instructions
+        assert "head=50" in prompt
+        assert "read_text_file" in prompt
+        assert "Context-Efficient" in prompt or "context-efficient" in prompt.lower()
+        # Verify it still includes absolute path warning
+        assert "/test/path/" in prompt
+
+    def test_get_structure_prompt_non_mcp_unchanged(self):
+        """Test that non-MCP mode prompt is unchanged."""
+        from src.agents.deep_structure_agent import get_structure_prompt
+
+        prompt = get_structure_prompt(
+            owner="test-org",
+            repo="test-repo",
+            file_tree="├── src/",
+            readme_content="# Test",
+            clone_path=None,
+            use_mcp_tools=False,
+        )
+
+        # Non-MCP mode should not have head parameter
+        assert "head=50" not in prompt
+        # But should have grep (FilesystemBackend)
+        assert "grep" in prompt

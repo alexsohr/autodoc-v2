@@ -100,11 +100,9 @@ class DocumentProcessingService:
             return {
                 "status": processing_result["status"],
                 "repository_id": str(repository_id),
-                "documents_processed": processing_result.get("processed_files", 0),
-                "embeddings_generated": processing_result.get(
-                    "embeddings_generated", 0
-                ),
-                "processing_time": processing_result.get("processing_time", 0),
+                "documentation_files": processing_result.get("documentation_files", []),
+                "file_tree": processing_result.get("file_tree", ""),
+                "clone_path": processing_result.get("clone_path"),
                 "error_message": processing_result.get("error_message"),
                 "reprocessed": force_reprocess,
             }

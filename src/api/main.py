@@ -26,57 +26,65 @@ from src.api.routes import chat, health, repositories, webhooks, wiki
 from src.repository.database import close_mongodb, init_mongodb
 from src.services.mcp_filesystem_client import close_mcp_filesystem, init_mcp_filesystem
 from src.utils.config_loader import get_settings
+from src.utils.logging_config import setup_logging
+
+import structlog
+
+# Initialize structured logging early
+setup_logging()
+logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan management"""
     # Startup
-    print("AutoDoc v2 starting up...")
+    logger.info("AutoDoc v2 starting up...")
     try:
         # Configure LangSmith tracing
         settings = get_settings()
         settings.configure_langsmith()
+        settings.configure_llm_environment()
         if settings.is_langsmith_enabled:
-            print(f"LangSmith tracing enabled for project: {settings.langsmith_project}")
+            logger.info("LangSmith tracing enabled", project=settings.langsmith_project)
         else:
-            print("LangSmith tracing disabled (no API key provided)")
-        
+            logger.info("LangSmith tracing disabled (no API key provided)")
+
         # Initialize data access layer (MongoDB/Beanie)
         await init_mongodb()
-        print("Database initialized successfully")
+        logger.info("Database initialized successfully")
 
         # Initialize MCP filesystem client (if enabled)
         if settings.mcp_filesystem_enabled:
             mcp_initialized = await init_mcp_filesystem()
             if mcp_initialized:
-                print("MCP filesystem client initialized successfully")
+                logger.info("MCP filesystem client initialized successfully")
             else:
-                print("MCP filesystem client initialization failed (will use fallback)")
+                logger.warning("MCP filesystem client initialization failed (will use fallback)")
         else:
-            print("MCP filesystem integration disabled")
+            logger.info("MCP filesystem integration disabled")
 
         # TODO: Initialize storage adapters
         # TODO: Load LLM configurations
     except Exception as e:
-        print(f"Failed to initialize: {e}")
+        logger.exception("Failed to initialize", error=str(e))
         raise
 
     yield
 
     # Shutdown
-    print("AutoDoc v2 shutting down...")
+    logger.info("AutoDoc v2 shutting down...")
     try:
         # Close MCP filesystem client
         await close_mcp_filesystem()
-        print("MCP filesystem client closed")
+        logger.info("MCP filesystem client closed")
 
         # Close database connections
         await close_mongodb()
-        print("Database connections closed")
+        logger.info("Database connections closed")
         # TODO: Cleanup resources
     except Exception as e:
-        print(f"Error during shutdown: {e}")
+        logger.error("Error during shutdown", error=str(e))
 
 
 def create_app() -> FastAPI:
@@ -270,11 +278,29 @@ app = create_app()
 
 def main():
     """Main entry point for running the application"""
+    # Patterns to exclude from file watching (matching .gitignore)
+    reload_excludes = [
+        ".env",
+        "venv",
+        ".pytest_cache",
+        "__pycache__",
+        "*.egg-info",
+        "data",
+        ".claude",
+        ".serena",
+        "logs",
+        "*.pyc",
+        "*.pyo",
+        ".git",
+    ]
+
     uvicorn.run(
         "src.api.main:app",
         host=os.getenv("API_HOST", "0.0.0.0"),
         port=int(os.getenv("API_PORT", "8000")),
         reload=os.getenv("RELOAD", "true").lower() == "true",
+        reload_dirs=["src"],
+        reload_excludes=reload_excludes,
         workers=int(os.getenv("WORKERS", "1")),
         log_level=os.getenv("LOG_LEVEL", "info").lower(),
     )

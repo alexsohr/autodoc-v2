@@ -126,8 +126,26 @@ class TestGetPagePrompt:
             use_mcp_tools=False,
         )
 
-        assert "read_text_file" not in prompt
+        assert "read_text_file" not in prompt  # MCP tool not present
         assert "Test" in prompt
+
+    def test_prompt_with_mcp_tools_includes_examples(self):
+        """When use_mcp_tools=True, MCP tool examples are included."""
+        prompt = get_page_prompt(
+            page_title="Test",
+            page_description="Desc",
+            file_hints=[],
+            clone_path="/tmp/repo",
+            repo_name="repo",
+            repo_description="desc",
+            use_mcp_tools=True,
+        )
+
+        # MCP tools and examples should be present
+        assert "read_text_file" in prompt
+        assert "search_files" in prompt
+        assert "head=50" in prompt  # Context-efficient reading
+        assert "/tmp/repo" in prompt  # Clone path in examples
 
     def test_prompt_requires_5_sources(self):
         prompt = get_page_prompt(

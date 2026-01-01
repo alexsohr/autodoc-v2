@@ -19,10 +19,16 @@ The agent will no longer read all file contents, generate embeddings, or store d
 clone → discover_files → process_content (ALL files) → generate_embeddings → store_documents → cleanup
 ```
 
-### New Flow
+### New Flow (Updated 2025-12-29)
 ```
-clone → load_patterns → discover_and_build_tree → extract_docs → END
+clone → build_tree → extract_docs → load_patterns → cleanup_excluded → END
 ```
+
+**Key Design Decisions:**
+- `build_tree` loads patterns internally (not from state) for filtering
+- `load_patterns` only sets state for the cleanup step to use
+- `cleanup_excluded` physically deletes excluded files/dirs from the cloned repo
+- This makes the repo ready for Wiki Agent's file searches
 
 ## State Structure
 
@@ -180,31 +186,38 @@ src/
     └── user.py
 ```
 
-## Workflow Nodes
+## Workflow Nodes (Updated 2025-12-29)
 
-### 1. clone_repository (existing)
+### 1. clone_repository
 - Clones repo to temp directory
 - No changes needed
 
-### 2. load_patterns (new)
-- Load defaults from `config_loader.py`
-- Check if `.autodoc/autodoc.json` exists in cloned repo
-- If yes, replace patterns with values from that file
-- Store in state: `excluded_dirs`, `excluded_files`
-
-### 3. discover_and_build_tree (replaces discover_files + process_content)
+### 2. discover_and_build_tree (build_tree)
+- Loads patterns internally using `_load_exclusion_patterns()` helper
 - Walk directory tree starting from clone_path
 - Apply exclusion filters (dirs and files)
 - Build ASCII tree string
 - Store in state: `file_tree`
-- Does NOT read file contents
+- Does NOT read file contents, does NOT store patterns in state
 
-### 4. extract_docs (new)
+### 3. extract_docs
 - Match files against `DOC_FILE_PATTERNS`
 - Read content of matched files only
 - Store in state: `documentation_files` as `[{path, content}, ...]`
 
-### 5. handle_error (existing)
+### 4. load_patterns
+- Loads patterns using `_load_exclusion_patterns()` helper
+- Stores patterns in state for cleanup step to use
+- Progress: 80%
+
+### 5. cleanup_excluded (NEW)
+- Reads patterns from state
+- Physically DELETES excluded directories from cloned repo
+- Physically DELETES excluded files from cloned repo
+- Makes the repo ready for Wiki Agent's file searches
+- Sets progress: 100% and status: "success"
+
+### 6. handle_error
 - Error handling node
 - No changes needed
 
@@ -215,25 +228,28 @@ src/
 - `_cleanup_node` - Temp folder stays for Wiki Agent
 - Embedding tool dependency
 
-## Implementation Files
+## Implementation Files (Updated 2025-12-29)
 
-### Files to Modify
+### Files Modified
 
 1. **`src/utils/config_loader.py`**
-   - Add `default_excluded_dirs: List[str]`
-   - Add `default_excluded_files: List[str]`
+   - Added `default_excluded_dirs: List[str]` (18 patterns)
+   - Added `default_excluded_files: List[str]` (79 patterns)
 
 2. **`src/agents/document_agent.py`**
-   - Update `DocumentProcessingState`
-   - Add `DOC_FILE_PATTERNS` constant
-   - Remove nodes: `_generate_embeddings_node`, `_store_documents_node`, `_cleanup_node`
-   - Add node: `_load_patterns_node`
-   - Replace: `_discover_files_node` → `_discover_and_build_tree_node`
-   - Replace: `_process_content_node` → `_extract_docs_node`
-   - Update `_create_workflow`
+   - Updated `DocumentProcessingState` with new fields
+   - Added `DOC_FILE_PATTERNS` constant for doc file detection
+   - Added `_load_exclusion_patterns()` helper method
+   - Added `_cleanup_excluded_node` for physical file/dir deletion
+   - Updated workflow order: clone → build_tree → extract_docs → load_patterns → cleanup_excluded
+   - Simplified constructor to only require `repository_tool` and `repository_repo`
 
-### Files to Review
-- Orchestration layer / Wiki Agent that consumes Document Agent output
+3. **`src/dependencies.py`**
+   - Updated `get_document_agent()` for new constructor signature
+
+### Files Already Correct
+- `src/services/document_service.py` - Uses correct field names
+- `src/agents/workflow.py` - Checks for correct "success" status
 
 ## Output Contract
 

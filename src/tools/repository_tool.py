@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -67,13 +68,14 @@ class RepositoryTool(BaseTool):
 
     def __init__(self):
         """Initialize RepositoryTool.
-        
+
         No dependencies to inject - this tool manages repository operations independently.
         """
         super().__init__()
         # Initialize settings and configuration
         settings = get_settings()
         self._clone_timeout = settings.clone_timeout_seconds
+        self._storage_base_path = settings.storage_base_path
         self._max_file_size = settings.max_file_size_mb * 1024 * 1024
         self._supported_languages = set(settings.supported_languages)
 
@@ -94,6 +96,35 @@ class RepositoryTool(BaseTool):
         """Sync run method (not used in async workflows)"""
         raise NotImplementedError("Repository tool only supports async operations")
 
+    async def _run_git_command(
+        self,
+        cmd: List[str],
+        cwd: Optional[Path] = None,
+        timeout: Optional[int] = None,
+    ) -> subprocess.CompletedProcess:
+        """Run a git command in a Windows-compatible way.
+
+        Uses asyncio.to_thread with subprocess.run instead of
+        asyncio.create_subprocess_exec, which doesn't work on Windows with uvicorn.
+
+        Args:
+            cmd: Command and arguments to run
+            cwd: Working directory
+            timeout: Timeout in seconds
+
+        Returns:
+            CompletedProcess with returncode, stdout, stderr
+        """
+        def run_subprocess():
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                cwd=cwd,
+                timeout=timeout or 30,
+            )
+
+        return await asyncio.to_thread(run_subprocess)
+
     async def clone_repository(
         self,
         repository_url: str,
@@ -112,6 +143,10 @@ class RepositoryTool(BaseTool):
         Returns:
             Dictionary with clone results
         """
+        logger.info(
+            f"Starting clone: url={repository_url!r}, branch={branch!r}, "
+            f"depth={depth}, target_dir={target_directory!r}"
+        )
         try:
             # Validate repository URL
             parsed_url = urlparse(repository_url)
@@ -120,7 +155,14 @@ class RepositoryTool(BaseTool):
 
             # Create target directory
             if target_directory is None:
-                target_directory = tempfile.mkdtemp(prefix="autodoc_repo_")
+                if self._storage_base_path:
+                    # Use configured storage base path with repos subdirectory
+                    base_path = Path(self._storage_base_path) / "repos"
+                    base_path.mkdir(parents=True, exist_ok=True)
+                    target_directory = tempfile.mkdtemp(prefix="autodoc_repo_", dir=base_path)
+                else:
+                    # Fall back to system temp directory
+                    target_directory = tempfile.mkdtemp(prefix="autodoc_repo_")
             else:
                 os.makedirs(target_directory, exist_ok=True)
 
@@ -137,29 +179,35 @@ class RepositoryTool(BaseTool):
 
             git_cmd.extend([repository_url, str(target_path)])
 
-            # Execute git clone with timeout
-            process = await asyncio.create_subprocess_exec(
-                *git_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=target_path.parent,
-            )
+            logger.info(f"Executing git command: {' '.join(git_cmd)}")
+            logger.debug(f"Working directory: {target_path.parent}")
+
+            # Execute git clone using subprocess.run in a thread (Windows compatible)
+            # asyncio.create_subprocess_exec doesn't work on Windows with uvicorn
+            def run_git_clone():
+                return subprocess.run(
+                    git_cmd,
+                    capture_output=True,
+                    cwd=target_path.parent,
+                    timeout=self._clone_timeout,
+                )
 
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=self._clone_timeout
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(run_git_clone),
+                    timeout=self._clone_timeout + 5,  # Extra buffer for thread overhead
                 )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+            except (asyncio.TimeoutError, subprocess.TimeoutExpired):
                 raise TimeoutError(
                     f"Repository clone timeout after {self._clone_timeout} seconds"
                 )
 
-            if process.returncode != 0:
-                error_msg = stderr.decode("utf-8") if stderr else "Unknown git error"
+            if result.returncode != 0:
+                error_msg = result.stderr.decode("utf-8") if result.stderr else "Unknown git error"
+                logger.error(f"Git clone returned {result.returncode}: {error_msg}")
                 raise RuntimeError(f"Git clone failed: {error_msg}")
 
+            logger.info(f"Git clone succeeded, getting repository info from {target_path}")
             # Get repository information
             repo_info = await self._get_repository_info(target_path)
 
@@ -171,13 +219,16 @@ class RepositoryTool(BaseTool):
             }
 
         except Exception as e:
-            logger.error(f"Repository clone failed: {e}")
+            logger.error(
+                f"Repository clone failed: {e!r} (type: {type(e).__name__})\n"
+                f"Traceback:\n{traceback.format_exc()}"
+            )
 
             # Cleanup on failure
             if target_directory and Path(target_directory).exists():
                 shutil.rmtree(target_directory, ignore_errors=True)
 
-            return {"status": "error", "error": str(e), "error_type": type(e).__name__}
+            return {"status": "error", "error": str(e) or repr(e), "error_type": type(e).__name__}
 
     async def analyze_repository(
         self,
@@ -378,61 +429,39 @@ class RepositoryTool(BaseTool):
         """
         try:
             # Get remote origin URL
-            process = await asyncio.create_subprocess_exec(
-                "git",
-                "config",
-                "--get",
-                "remote.origin.url",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await self._run_git_command(
+                ["git", "config", "--get", "remote.origin.url"],
                 cwd=repo_path,
             )
-            stdout, _ = await process.communicate()
             origin_url = (
-                stdout.decode("utf-8").strip() if process.returncode == 0 else ""
+                result.stdout.decode("utf-8").strip() if result.returncode == 0 else ""
             )
 
             # Get current branch
-            process = await asyncio.create_subprocess_exec(
-                "git",
-                "branch",
-                "--show-current",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await self._run_git_command(
+                ["git", "branch", "--show-current"],
                 cwd=repo_path,
             )
-            stdout, _ = await process.communicate()
             current_branch = (
-                stdout.decode("utf-8").strip() if process.returncode == 0 else ""
+                result.stdout.decode("utf-8").strip() if result.returncode == 0 else ""
             )
 
             # Get latest commit SHA
-            process = await asyncio.create_subprocess_exec(
-                "git",
-                "rev-parse",
-                "HEAD",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await self._run_git_command(
+                ["git", "rev-parse", "HEAD"],
                 cwd=repo_path,
             )
-            stdout, _ = await process.communicate()
             commit_sha = (
-                stdout.decode("utf-8").strip() if process.returncode == 0 else ""
+                result.stdout.decode("utf-8").strip() if result.returncode == 0 else ""
             )
 
             # Get commit count
-            process = await asyncio.create_subprocess_exec(
-                "git",
-                "rev-list",
-                "--count",
-                "HEAD",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await self._run_git_command(
+                ["git", "rev-list", "--count", "HEAD"],
                 cwd=repo_path,
             )
-            stdout, _ = await process.communicate()
             commit_count = (
-                int(stdout.decode("utf-8").strip()) if process.returncode == 0 else 0
+                int(result.stdout.decode("utf-8").strip()) if result.returncode == 0 else 0
             )
 
             return {
@@ -545,37 +574,26 @@ class RepositoryTool(BaseTool):
             git_info = {}
 
             # Get all branches
-            process = await asyncio.create_subprocess_exec(
-                "git",
-                "branch",
-                "-a",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await self._run_git_command(
+                ["git", "branch", "-a"],
                 cwd=repo_path,
             )
-            stdout, _ = await process.communicate()
-            if process.returncode == 0:
+            if result.returncode == 0:
                 branches = [
                     line.strip().replace("* ", "").replace("remotes/origin/", "")
-                    for line in stdout.decode("utf-8").split("\n")
+                    for line in result.stdout.decode("utf-8").split("\n")
                     if line.strip() and not line.strip().startswith("HEAD")
                 ]
                 git_info["branches"] = list(set(branches))
 
             # Get recent commits
-            process = await asyncio.create_subprocess_exec(
-                "git",
-                "log",
-                "--oneline",
-                "-10",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await self._run_git_command(
+                ["git", "log", "--oneline", "-10"],
                 cwd=repo_path,
             )
-            stdout, _ = await process.communicate()
-            if process.returncode == 0:
+            if result.returncode == 0:
                 commits = []
-                for line in stdout.decode("utf-8").split("\n"):
+                for line in result.stdout.decode("utf-8").split("\n"):
                     if line.strip():
                         parts = line.strip().split(" ", 1)
                         if len(parts) == 2:
@@ -583,17 +601,12 @@ class RepositoryTool(BaseTool):
                 git_info["recent_commits"] = commits
 
             # Get repository size
-            process = await asyncio.create_subprocess_exec(
-                "git",
-                "count-objects",
-                "-vH",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await self._run_git_command(
+                ["git", "count-objects", "-vH"],
                 cwd=repo_path,
             )
-            stdout, _ = await process.communicate()
-            if process.returncode == 0:
-                for line in stdout.decode("utf-8").split("\n"):
+            if result.returncode == 0:
+                for line in result.stdout.decode("utf-8").split("\n"):
                     if "size-pack" in line:
                         git_info["repository_size"] = line.split(":")[1].strip()
                         break

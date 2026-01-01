@@ -145,19 +145,22 @@ class WikiGenerationService:
             # Convert to WikiStructure model
             wiki_data["id"] = wiki_data.get("id", f"wiki_{repository_id}")
 
-            # Convert pages to WikiPageDetail objects
-            pages = []
-            for page_data in wiki_data.get("pages", []):
-                if not include_content:
-                    page_data["content"] = ""  # Exclude content if not requested
-
-                page = WikiPageDetail(**page_data)
-                pages.append(page)
-
-            # Convert sections to WikiSection objects
+            # Convert sections to WikiSection objects with embedded pages
             sections = []
             for section_data in wiki_data.get("sections", []):
-                section = WikiSection(**section_data)
+                # Convert pages within section
+                section_pages = []
+                for page_data in section_data.get("pages", []):
+                    if not include_content:
+                        page_data["content"] = ""  # Exclude content if not requested
+                    page = WikiPageDetail(**page_data)
+                    section_pages.append(page)
+
+                section = WikiSection(
+                    id=section_data["id"],
+                    title=section_data["title"],
+                    pages=section_pages,
+                )
                 sections.append(section)
 
             # Create complete wiki structure
@@ -166,9 +169,7 @@ class WikiGenerationService:
                 repository_id=repository_id,
                 title=wiki_data["title"],
                 description=wiki_data["description"],
-                pages=pages,
                 sections=sections,
-                root_sections=wiki_data.get("root_sections", []),
             )
 
             # Apply section filter if specified
@@ -221,11 +222,14 @@ class WikiGenerationService:
                     "error_type": "WikiNotFound",
                 }
 
-            # Find specific page
+            # Find specific page within sections
             page_data = None
-            for page in wiki_data.get("pages", []):
-                if page["id"] == page_id:
-                    page_data = page
+            for section in wiki_data.get("sections", []):
+                for page in section.get("pages", []):
+                    if page["id"] == page_id:
+                        page_data = page
+                        break
+                if page_data:
                     break
 
             if not page_data:
@@ -289,14 +293,17 @@ class WikiGenerationService:
                     "error_type": "WikiNotFound",
                 }
 
-            # Find and update page
-            pages = wiki_data.get("pages", [])
+            # Find and update page within sections
+            sections = wiki_data.get("sections", [])
             page_found = False
 
-            for page in pages:
-                if page["id"] == page_id:
-                    page["content"] = new_content
-                    page_found = True
+            for section in sections:
+                for page in section.get("pages", []):
+                    if page["id"] == page_id:
+                        page["content"] = new_content
+                        page_found = True
+                        break
+                if page_found:
                     break
 
             if not page_found:
@@ -307,13 +314,13 @@ class WikiGenerationService:
                 }
 
             # Update wiki structure in database
-            wiki_data["pages"] = pages
+            wiki_data["sections"] = sections
             wiki_data["updated_at"] = datetime.now(timezone.utc)
 
             success = await wiki_structure_repo.update_one(
                 "wiki_structures",
                 {"repository_id": str(repository_id)},
-                {"pages": pages, "updated_at": wiki_data["updated_at"]},
+                {"sections": sections, "updated_at": wiki_data["updated_at"]},
             )
 
             if success:
@@ -427,29 +434,18 @@ class WikiGenerationService:
         """
         try:
             # Find the requested section
-            target_section = None
-            for section in wiki_structure.sections:
-                if section.id == section_id:
-                    target_section = section
-                    break
+            target_section = wiki_structure.get_section(section_id)
 
             if not target_section:
                 return wiki_structure  # Return original if section not found
 
-            # Filter pages to only include those in the section
-            filtered_pages = [
-                page for page in wiki_structure.pages if page.id in target_section.pages
-            ]
-
-            # Create filtered structure
+            # Create filtered structure with only the target section
             filtered_structure = WikiStructure(
                 id=wiki_structure.id,
                 repository_id=wiki_structure.repository_id,
                 title=wiki_structure.title,
                 description=wiki_structure.description,
-                pages=filtered_pages,
                 sections=[target_section],
-                root_sections=[section_id],
             )
 
             return filtered_structure
@@ -477,13 +473,14 @@ class WikiGenerationService:
             if readme_content:
                 doc_files.append({"path": "docs/README.md", "content": readme_content})
 
-            # Generate individual page files
-            for page_data in wiki_data.get("pages", []):
-                if page_data.get("content"):
-                    file_path = f"docs/{page_data['id']}.md"
-                    doc_files.append(
-                        {"path": file_path, "content": page_data["content"]}
-                    )
+            # Generate individual page files from sections
+            for section in wiki_data.get("sections", []):
+                for page_data in section.get("pages", []):
+                    if page_data.get("content"):
+                        file_path = f"docs/{page_data['id']}.md"
+                        doc_files.append(
+                            {"path": file_path, "content": page_data["content"]}
+                        )
 
             # Generate navigation index
             nav_content = self._generate_navigation_index(wiki_data)
@@ -517,25 +514,18 @@ This documentation is organized into the following sections:
 
 """
 
-            # Add section links
+            # Add section links (pages are now embedded in sections)
             for section_data in wiki_data.get("sections", []):
                 section_title = section_data.get("title", section_data["id"])
                 readme_content += f"### {section_title}\n\n"
 
-                for page_id in section_data.get("pages", []):
-                    # Find page details
-                    page_data = None
-                    for page in wiki_data.get("pages", []):
-                        if page["id"] == page_id:
-                            page_data = page
-                            break
-
-                    if page_data:
-                        page_title = page_data.get("title", page_id)
-                        page_desc = page_data.get("description", "")
-                        readme_content += (
-                            f"- [{page_title}](docs/{page_id}.md) - {page_desc}\n"
-                        )
+                for page_data in section_data.get("pages", []):
+                    page_id = page_data.get("id") if isinstance(page_data, dict) else page_data
+                    page_title = page_data.get("title", page_id) if isinstance(page_data, dict) else page_id
+                    page_desc = page_data.get("description", "") if isinstance(page_data, dict) else ""
+                    readme_content += (
+                        f"- [{page_title}](docs/{page_id}.md) - {page_desc}\n"
+                    )
 
                 readme_content += "\n"
 
@@ -568,18 +558,9 @@ This documentation is organized into the following sections:
 
 """
 
-            # Generate hierarchical navigation
-            for section_id in wiki_data.get("root_sections", []):
-                section_data = None
-                for section in wiki_data.get("sections", []):
-                    if section["id"] == section_id:
-                        section_data = section
-                        break
-
-                if section_data:
-                    nav_content += self._generate_section_nav(
-                        section_data, wiki_data, level=1
-                    )
+            # Generate navigation for all sections
+            for section_data in wiki_data.get("sections", []):
+                nav_content += self._generate_section_nav(section_data, level=1)
 
             return nav_content
 
@@ -588,13 +569,12 @@ This documentation is organized into the following sections:
             return None
 
     def _generate_section_nav(
-        self, section_data: Dict[str, Any], wiki_data: Dict[str, Any], level: int = 1
+        self, section_data: Dict[str, Any], level: int = 1
     ) -> str:
         """Generate navigation for a section
 
         Args:
-            section_data: Section data
-            wiki_data: Complete wiki data
+            section_data: Section data with embedded pages
             level: Nesting level
 
         Returns:
@@ -603,30 +583,11 @@ This documentation is organized into the following sections:
         indent = "  " * (level - 1)
         nav_content = f"{indent}- **{section_data.get('title', section_data['id'])}**\n"
 
-        # Add pages
-        for page_id in section_data.get("pages", []):
-            page_data = None
-            for page in wiki_data.get("pages", []):
-                if page["id"] == page_id:
-                    page_data = page
-                    break
-
-            if page_data:
-                page_title = page_data.get("title", page_id)
-                nav_content += f"{indent}  - [{page_title}](docs/{page_id}.md)\n"
-
-        # Add subsections
-        for subsection_id in section_data.get("subsections", []):
-            subsection_data = None
-            for section in wiki_data.get("sections", []):
-                if section["id"] == subsection_id:
-                    subsection_data = section
-                    break
-
-            if subsection_data:
-                nav_content += self._generate_section_nav(
-                    subsection_data, wiki_data, level + 1
-                )
+        # Add pages (now embedded in section)
+        for page_data in section_data.get("pages", []):
+            page_id = page_data.get("id") if isinstance(page_data, dict) else page_data
+            page_title = page_data.get("title", page_id) if isinstance(page_data, dict) else page_id
+            nav_content += f"{indent}  - [{page_title}](docs/{page_id}.md)\n"
 
         return nav_content
 
@@ -754,11 +715,14 @@ This pull request contains updated documentation generated by AutoDoc v2.
                     "error_type": "WikiNotFound",
                 }
 
-            # Find page
+            # Find page within sections
             page_data = None
-            for page in wiki_data.get("pages", []):
-                if page["id"] == page_id:
-                    page_data = page
+            for section in wiki_data.get("sections", []):
+                for page in section.get("pages", []):
+                    if page["id"] == page_id:
+                        page_data = page
+                        break
+                if page_data:
                     break
 
             if not page_data:

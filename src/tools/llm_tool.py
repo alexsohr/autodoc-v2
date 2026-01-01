@@ -84,14 +84,15 @@ class LLMTool(BaseTool):
         """Initialize LLMTool.
         
         No dependencies to inject - this tool manages its own LLM providers.
+        Uses lazy initialization - providers are created on first use.
         """
         super().__init__()
-        # Initialize settings and configuration
-        settings = get_settings()
+        # Store settings for lazy initialization
+        self._settings = get_settings()
 
-        # Initialize LLM providers
+        # Lazy initialization - providers created on first use
         self._llm_providers: Dict[LLMProvider, BaseLanguageModel] = {}
-        self._setup_llm_providers(settings)
+        self._providers_initialized = False
 
         # Default generation parameters
         self._default_max_tokens = 4000
@@ -697,7 +698,7 @@ Code:
     def _get_llm_provider(
         self, provider: Optional[str] = None
     ) -> Optional[BaseLanguageModel]:
-        """Get LLM provider instance
+        """Get LLM provider instance (lazy initialization)
 
         Args:
             provider: Provider name (defaults to first available)
@@ -705,6 +706,11 @@ Code:
         Returns:
             LLM provider instance or None
         """
+        # Lazy initialize providers on first access
+        if not self._providers_initialized:
+            self._setup_llm_providers(self._settings)
+            self._providers_initialized = True
+
         if provider:
             try:
                 provider_enum = LLMProvider(provider)
@@ -925,6 +931,11 @@ Instructions:
         Returns:
             List of available provider names
         """
+        # Ensure providers are initialized
+        if not self._providers_initialized:
+            self._setup_llm_providers(self._settings)
+            self._providers_initialized = True
+            
         return [provider.value for provider in self._llm_providers.keys()]
 
     def get_provider_capabilities(

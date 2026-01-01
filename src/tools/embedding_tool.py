@@ -76,12 +76,12 @@ class EmbeddingTool(BaseTool):
         """
         super().__init__()
         # Initialize settings and configuration
-        settings = get_settings()
-        self._batch_size = settings.embedding_batch_size
+        self._settings = get_settings()
+        self._batch_size = self._settings.embedding_batch_size
 
-        # Initialize embedding providers
-        self._embedding_providers = {}
-        self._setup_embedding_providers(settings)
+        # Lazy initialization - providers created on first use
+        self._embedding_providers: Dict = {}
+        self._providers_initialized = False
 
         # Repository injected via DI
         self._code_document_repo = code_document_repo
@@ -409,7 +409,7 @@ class EmbeddingTool(BaseTool):
             }
 
     def _get_embedding_provider(self, provider: Optional[str] = None):
-        """Get embedding provider instance
+        """Get embedding provider instance (lazy initialization)
 
         Args:
             provider: Provider name (defaults to first available)
@@ -417,6 +417,11 @@ class EmbeddingTool(BaseTool):
         Returns:
             Embedding provider instance or None
         """
+        # Lazy initialize providers on first access
+        if not self._providers_initialized:
+            self._setup_embedding_providers(self._settings)
+            self._providers_initialized = True
+
         if provider:
             return self._embedding_providers.get(LLMProvider(provider))
 
@@ -696,6 +701,11 @@ class EmbeddingTool(BaseTool):
         Returns:
             List of available provider names
         """
+        # Ensure providers are initialized
+        if not self._providers_initialized:
+            self._setup_embedding_providers(self._settings)
+            self._providers_initialized = True
+            
         return [provider.value for provider in self._embedding_providers.keys()]
 
     def get_provider_info(self, provider: Optional[str] = None) -> Dict[str, Any]:

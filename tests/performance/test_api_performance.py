@@ -102,28 +102,24 @@ class TestAPIPerformance:
                 "id": f"wiki_{repository_id}",
                 "title": "Test Repository Documentation",
                 "description": "Generated documentation",
-                "pages": [
-                    {
-                        "id": f"page_{i}",
-                        "title": f"Page {i}",
-                        "description": f"Description for page {i}",
-                        "importance": "medium",
-                        "file_paths": [f"src/file_{i}.py"],
-                        "related_pages": [],
-                        "content": f"Content for page {i}" * 100,  # Substantial content
-                    }
-                    for i in range(10)
-                ],
                 "sections": [
                     {
                         "id": f"section_{i}",
                         "title": f"Section {i}",
-                        "pages": [f"page_{i}"],
-                        "subsections": [],
+                        "pages": [
+                            {
+                                "id": f"page_{i}",
+                                "title": f"Page {i}",
+                                "description": f"Description for page {i}",
+                                "importance": "medium",
+                                "file_paths": [f"src/file_{i}.py"],
+                                "related_pages": [],
+                                "content": f"Content for page {i}" * 100,
+                            }
+                        ],
                     }
                     for i in range(5)
                 ],
-                "root_sections": [f"section_{i}" for i in range(5)],
             }
 
             mock_service.get_wiki_structure.return_value = {
@@ -522,7 +518,7 @@ class TestCachePerformance:
                     "wiki_structure": {
                         "id": f"wiki_{repo_id}",
                         "title": "Test Wiki",
-                        "pages": [],
+                        "description": "Test description",
                         "sections": [],
                     },
                 }
