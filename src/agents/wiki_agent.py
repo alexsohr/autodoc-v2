@@ -788,7 +788,7 @@ Remember:
             # Create complete wiki structure (pages are now in sections)
             wiki_structure = WikiStructure(
                 id=f"wiki_{state['repository_id']}",
-                repository_id=state["repository_id"],
+                repository_id=UUID(state["repository_id"]),
                 title=wiki_data["title"],
                 description=wiki_data["description"],
                 sections=wiki_sections,
