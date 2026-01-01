@@ -16,6 +16,7 @@ from uuid import UUID
 import structlog
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 
 from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
@@ -61,6 +62,176 @@ class PageWorkerState(TypedDict):
     clone_path: Optional[str]  # For reading files from disk
     # MUST match WikiGenerationState for aggregation!
     generated_pages: Annotated[List[Dict[str, Any]], operator.add]
+
+
+def fan_out_to_page_workers(state: WikiGenerationState) -> list[Send]:
+    """Create parallel page generation tasks using LangGraph Send.
+
+    Each Send creates a separate page_worker execution with its own state.
+    The worker state includes `generated_pages` with the same reducer as
+    the main state, allowing LangGraph to aggregate results automatically.
+
+    Args:
+        state: Current workflow state with wiki_structure and clone_path
+
+    Returns:
+        List of Send objects, one per page to generate
+    """
+    if not state.get("wiki_structure"):
+        logger.warning("No wiki_structure found, cannot fan out to page workers")
+        return []
+
+    pages = state["wiki_structure"].get("pages", [])
+    if not pages:
+        logger.warning("No pages in wiki_structure")
+        return []
+
+    clone_path = state.get("clone_path")
+    if not clone_path:
+        logger.error("clone_path not set in state, cannot read files for page generation")
+        return []
+
+    sends = []
+    for page in pages:
+        # Each Send payload becomes the worker's input state
+        # CRITICAL: Must include generated_pages for aggregation to work
+        sends.append(
+            Send("page_worker", {
+                "page_info": page,
+                "clone_path": clone_path,
+                "generated_pages": [],  # Will be populated by worker, then aggregated
+            })
+        )
+
+    logger.info("Fanning out to parallel page workers", num_pages=len(sends))
+    return sends
+
+
+async def page_worker_node(state: PageWorkerState) -> Dict[str, Any]:
+    """Generate content for a single wiki page by reading files from disk.
+
+    This node runs in parallel for each page via LangGraph's Send API.
+    It reads files using clone_path + file_paths, then generates content.
+
+    IMPORTANT: Returns {"generated_pages": [page_result]} which gets
+    aggregated with other workers via the operator.add reducer.
+
+    Args:
+        state: PageWorkerState with page_info, clone_path, and generated_pages
+
+    Returns:
+        Dict with 'generated_pages' list containing the page with generated content
+    """
+    import os
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage
+
+    page_info = state["page_info"]
+    clone_path = state.get("clone_path")
+    file_paths = page_info.get("file_paths", [])
+
+    logger.info("Page worker starting", page_title=page_info["title"], num_files=len(file_paths))
+
+    # Read file contents from disk
+    file_contents: Dict[str, str] = {}
+
+    if clone_path and file_paths:
+        for file_path in file_paths[:10]:  # Limit to 10 files per page
+            full_path = os.path.join(clone_path, file_path)
+            try:
+                if os.path.exists(full_path) and os.path.isfile(full_path):
+                    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                        # Limit file size to prevent token overflow
+                        file_contents[file_path] = content[:15000]
+                        logger.debug("Read file", file_path=file_path, chars=len(content))
+                else:
+                    logger.warning("File not found or not a file", full_path=full_path)
+            except Exception as e:
+                logger.warning("Failed to read file", file_path=file_path, error=str(e))
+
+    if not file_contents:
+        logger.warning("No file contents available for page", page_title=page_info["title"])
+        # Return page without content - will be skipped or show placeholder
+        return {"generated_pages": []}
+
+    # Build prompt with file contents
+    files_markdown = "\n\n".join([
+        f"### File: {path}\n```\n{content[:8000]}\n```"
+        for path, content in file_contents.items()
+    ])
+
+    prompt = f"""Generate comprehensive wiki documentation for this page.
+
+## Page Information
+- **Title:** {page_info['title']}
+- **Section:** {page_info['section']}
+- **Description:** {page_info['description']}
+
+## Source Files
+{files_markdown}
+
+## Requirements
+1. Write clear, professional technical documentation in Markdown
+2. Include code examples extracted from the source files
+3. Explain the purpose and usage of each component
+4. Use proper headings, lists, and code blocks
+5. Be comprehensive but concise
+6. Do NOT include a title heading (it will be added automatically)
+
+Generate the page content now:
+"""
+
+    try:
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+
+        # Build result page
+        page_result = {
+            "title": page_info["title"],
+            "slug": page_info["slug"],
+            "section": page_info["section"],
+            "description": page_info["description"],
+            "file_paths": page_info.get("file_paths", []),
+            "content": response.content,
+        }
+
+        logger.info("Generated content for page", page_title=page_info["title"], content_chars=len(response.content))
+
+        # Return in format for aggregation via operator.add
+        return {"generated_pages": [page_result]}
+
+    except Exception as e:
+        logger.error("Failed to generate page", page_title=page_info["title"], error=str(e))
+        return {"generated_pages": []}
+
+
+async def aggregate_pages_node(state: WikiGenerationState) -> Dict[str, Any]:
+    """Aggregate results from all parallel page workers.
+
+    NOTE: LangGraph automatically aggregates generated_pages from all workers
+    via the operator.add reducer BEFORE this node runs. This node receives
+    the already-merged results.
+
+    This node:
+    1. Logs the aggregation results
+    2. Updates progress and step status
+    3. Prepares state for the store_wiki node
+
+    Args:
+        state: WikiGenerationState with aggregated generated_pages
+
+    Returns:
+        Updated state dict with progress and step updates
+    """
+    generated_pages = state.get("generated_pages", [])
+
+    logger.info("Aggregated pages from parallel workers", num_pages=len(generated_pages))
+
+    return {
+        "current_step": "pages_generated",
+        "progress": 90.0,
+    }
 
 
 class WikiGenerationAgent:
