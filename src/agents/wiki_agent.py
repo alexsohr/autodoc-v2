@@ -277,10 +277,19 @@ class WikiGenerationAgent:
         self.page_prompt_template = self._load_page_prompt()
 
     def _create_workflow(self) -> StateGraph:
-        """Create the wiki generation workflow graph
+        """Create the wiki generation workflow graph with parallel page generation.
+
+        Workflow:
+            START -> analyze_repository -> generate_structure
+                  -> [parallel page_workers via Send] -> aggregate_pages
+                  -> store_wiki -> END
+
+        The Send API creates parallel page_worker executions, each processing
+        one page. Results are automatically aggregated via the operator.add
+        reducer on generated_pages.
 
         Returns:
-            LangGraph StateGraph for wiki generation
+            Compiled LangGraph StateGraph
         """
         # Create workflow graph
         workflow = StateGraph(WikiGenerationState)
@@ -288,24 +297,36 @@ class WikiGenerationAgent:
         # Add nodes
         workflow.add_node("analyze_repository", self._analyze_repository_node)
         workflow.add_node("generate_structure", self._generate_structure_node)
-        workflow.add_node("generate_pages", self._generate_pages_node)
+        workflow.add_node("page_worker", page_worker_node)  # Parallel page generator
+        workflow.add_node("aggregate_pages", aggregate_pages_node)  # Post-aggregation status
         workflow.add_node("store_wiki", self._store_wiki_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
         # Define workflow edges
         workflow.add_edge(START, "analyze_repository")
-
-        # Sequential processing flow
         workflow.add_edge("analyze_repository", "generate_structure")
-        workflow.add_edge("generate_structure", "generate_pages")
-        workflow.add_edge("generate_pages", "store_wiki")
+
+        # Fan-out: generate_structure -> parallel page_workers via Send
+        # Each Send creates a separate page_worker execution
+        workflow.add_conditional_edges(
+            "generate_structure",
+            fan_out_to_page_workers,
+            ["page_worker"]
+        )
+
+        # Fan-in: all page_workers -> aggregate_pages
+        # LangGraph aggregates generated_pages via operator.add before this node
+        workflow.add_edge("page_worker", "aggregate_pages")
+
+        # Continue to storage
+        workflow.add_edge("aggregate_pages", "store_wiki")
         workflow.add_edge("store_wiki", END)
 
         # Error handling
         workflow.add_edge("handle_error", END)
 
         app = workflow.compile().with_config({"run_name": "wiki_agent.wiki_generation_workflow"})
-        logger.debug(f"Wiki generation workflow:\n {app.get_graph().draw_mermaid()}")
+        logger.debug("Wiki generation workflow (parallel) created")
         return app
 
     def _load_structure_prompt(self) -> str:
@@ -692,21 +713,50 @@ Remember:
             state["current_step"] = "storing_wiki"
             state["progress"] = 95.0
 
-            if not state["wiki_structure"] or not state["generated_pages"]:
-                state["error_message"] = "No wiki content to store"
+            if not state["wiki_structure"]:
+                state["error_message"] = "No wiki structure to store"
                 return state
 
             # Create WikiStructure object
             wiki_data = state["wiki_structure"]
 
-            # Build a map of page_id -> WikiPageDetail from generated pages
+            # IMPORTANT: Use generated_pages from parallel workers, not original pages
+            pages_to_store = state.get("generated_pages", [])
+
+            if not pages_to_store:
+                # Fallback to original pages if parallel generation failed
+                pages_to_store = state["wiki_structure"].get("pages", [])
+                logger.warning("No generated pages found, falling back to original structure")
+
+            if not pages_to_store:
+                state["error_message"] = "No wiki pages to store"
+                return state
+
+            # Build a map of page_id/slug -> WikiPageDetail from generated pages
+            # Parallel workers use 'slug' as the identifier, original uses 'id'
             pages_map = {}
-            for page_data in state["generated_pages"]:
+            for page_data in pages_to_store:
+                # Handle both 'id' and 'slug' as page identifiers
+                page_id = page_data.get("id") or page_data.get("slug")
+                if not page_id:
+                    logger.warning("Page missing id/slug, skipping", page_title=page_data.get("title"))
+                    continue
+
+                # Handle importance - may be string or PageImportance enum
+                importance_value = page_data.get("importance", "medium")
+                if isinstance(importance_value, str):
+                    try:
+                        importance = PageImportance(importance_value)
+                    except ValueError:
+                        importance = PageImportance.MEDIUM
+                else:
+                    importance = importance_value
+
                 page = WikiPageDetail(
-                    id=page_data["id"],
+                    id=page_id,
                     title=page_data["title"],
-                    description=page_data["description"],
-                    importance=PageImportance(page_data["importance"]),
+                    description=page_data.get("description", ""),
+                    importance=importance,
                     file_paths=page_data.get("file_paths", []),
                     related_pages=page_data.get("related_pages", []),
                     content=page_data.get("content", ""),
