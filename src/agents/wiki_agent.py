@@ -8,6 +8,7 @@ wiki-generation-prompts.md.
 import asyncio
 import json
 import operator
+import os
 import re
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
@@ -15,6 +16,7 @@ from uuid import UUID
 
 import structlog
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
@@ -122,13 +124,22 @@ async def page_worker_node(state: PageWorkerState) -> Dict[str, Any]:
     Returns:
         Dict with 'generated_pages' list containing the page with generated content
     """
-    import os
-    from langchain_openai import ChatOpenAI
-    from langchain_core.messages import HumanMessage
+    from ..utils.config_loader import get_settings
 
     page_info = state["page_info"]
     clone_path = state.get("clone_path")
     file_paths = page_info.get("file_paths", [])
+
+    # Validate page_info has required fields
+    required_keys = ["title", "section", "description", "slug"]
+    missing_keys = [k for k in required_keys if k not in page_info]
+    if missing_keys:
+        logger.warning(
+            "page_info missing required fields",
+            page_title=page_info.get("title", "UNKNOWN"),
+            missing_keys=missing_keys
+        )
+        return {"generated_pages": []}
 
     logger.info("Page worker starting", page_title=page_info["title"], num_files=len(file_paths))
 
@@ -183,7 +194,8 @@ Generate the page content now:
 """
 
     try:
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        settings = get_settings()
+        llm = ChatOpenAI(model=settings.openai_model, temperature=0)
         response = await llm.ainvoke([HumanMessage(content=prompt)])
 
         # Build result page
