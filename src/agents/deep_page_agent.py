@@ -106,21 +106,26 @@ def get_page_prompt(
     file_hints_str = (
         "\n".join(f"- {f}" for f in file_hints)
         if file_hints
-        else "- No specific files provided, explore to find relevant ones"
+        else "- No specific files provided - you must explore to find relevant ones"
     )
 
     tool_instructions = ""
     if use_mcp_tools:
         tool_instructions = f"""
-## Available Tools
-- `read_text_file(path, head=N)`: Read file contents. Use head=50 to read only first 50 lines efficiently.
+## Available Filesystem Tools
+
+You have access to the following tools to explore the codebase:
+- `read_text_file(path, head=N)`: Read file contents. Use head=50 to efficiently read only the first 50 lines.
 - `search_files(path, pattern)`: Search for files matching a pattern.
 - `list_directory(path)`: List directory contents.
 - `directory_tree(path)`: Get directory tree structure.
 
-All paths should be absolute, starting with: {clone_path}
+All paths must be absolute, starting with: {clone_path}
 
-Example: read_text_file(path="{clone_path}/src/main.py", head=50)
+Example usage:
+- read_text_file(path="{clone_path}/src/main.py", head=50)
+- search_files(path="{clone_path}/src", pattern="*.py")
+- list_directory(path="{clone_path}/src")
 """
 
     return f'''You are an expert technical writer and software architect.
@@ -132,44 +137,56 @@ Your task is to generate a comprehensive and accurate technical wiki page in Mar
 - **Clone Path:** {clone_path}
 
 ## Your Assignment
-- **Page Title:** {page_title}
-- **Page Description:** {page_description}
+You will be given:
+1. The "[WIKI_PAGE_TOPIC]" for the page you need to create: **{page_title}**
+2. Page Description: {page_description}
+3. A list of "[RELEVANT_SOURCE_FILES]" as starting hints - you MUST explore beyond these to find at least 5 relevant files.
 
-## Starting Files (hints - explore outward from here)
+## Starting File Hints
 {file_hints_str}
 {tool_instructions}
-## Output Requirements
+## CRITICAL STARTING INSTRUCTION
 
-CRITICAL STARTING INSTRUCTION:
-The very first thing in your content MUST be a `<details>` block listing ALL source files you used. There MUST be AT LEAST 5 source files listed - if fewer were provided as hints, you MUST find additional related files.
+The very first thing on the page MUST be a `<details>` block listing ALL the `[RELEVANT_SOURCE_FILES]` you used to generate the content. There MUST be AT LEAST 5 source files listed - if fewer were provided, you MUST find additional related files to include.
 
 Format it exactly like this:
+```
 <details>
 <summary>Relevant source files</summary>
 
 The following files were used as context for generating this wiki page:
 
-- file1.py
-- file2.py
-- (at least 5 files total)
+- path/to/file1.py
+- path/to/file2.py
+- path/to/file3.py
+- path/to/file4.py
+- path/to/file5.py
 </details>
+```
 
-Immediately after the `<details>` block, the main title should be an H1 heading: `# {page_title}`.
+Remember, do not provide any acknowledgements, disclaimers, apologies, or any other preface before the `<details>` block. JUST START with the `<details>` block.
 
-## Content Structure
+Immediately after the `<details>` block, the main title of the page should be a H1 Markdown heading: `# {page_title}`.
 
-1. **Introduction:** Start with 1-2 paragraphs explaining the purpose, scope, and high-level overview of "{page_title}" within the context of the overall project.
+## Content Requirements
 
-2. **Detailed Sections:** Break down "{page_title}" into logical sections using H2 (`##`) and H3 (`###`) headings. For each section:
+Based ONLY on the content of the `[RELEVANT_SOURCE_FILES]`:
+
+1. **Introduction:** Start with a concise introduction (1-2 paragraphs) explaining the purpose, scope, and high-level overview of "{page_title}" within the context of the overall project. If relevant, link to other potential wiki pages using the format `[Link Text](/wiki/page-slug)`.
+
+2. **Detailed Sections:** Break down "{page_title}" into logical sections using H2 (`##`) and H3 (`###`) Markdown headings. For each section:
    - Explain the architecture, components, data flow, or logic relevant to the section's focus
    - Identify key functions, classes, data structures, API endpoints, or configuration elements
 
-3. **Mermaid Diagrams:** EXTENSIVELY use Mermaid diagrams to visually represent architectures, flows, relationships, and schemas:
-   - CRITICAL: Use "graph TD" (top-down) directive - NEVER use "graph LR" (left-right)
-   - NEVER use parentheses or slashes in node text
-   - Maximum node width: 3-4 words
-   - For sequence diagrams: define ALL participants first, use correct arrow types (->> for request, -->> for response)
+3. **Mermaid Diagrams:**
+   - EXTENSIVELY use Mermaid diagrams (`flowchart TD`, `sequenceDiagram`, `classDiagram`, `erDiagram`, `graph TD`) to visually represent architectures, flows, relationships, and schemas
+   - Ensure diagrams are accurate and directly derived from the source files
    - Provide a brief explanation before or after each diagram
+   - CRITICAL diagram rules:
+     * Use "graph TD" (top-down) directive - NEVER use "graph LR" (left-right)
+     * NEVER use parentheses or slashes in node text
+     * Maximum node width: 3-4 words
+     * For sequence diagrams: define ALL participants first, use correct arrow types (->> for request, -->> for response, -x for failed)
 
 4. **Tables:** Use Markdown tables to summarize:
    - Key features or components and their descriptions
@@ -182,20 +199,24 @@ Immediately after the `<details>` block, the main title should be an H1 heading:
 6. **Source Citations (EXTREMELY IMPORTANT):**
    - For EVERY piece of significant information, you MUST cite the specific source file(s) and relevant line numbers
    - Place citations at the end of paragraphs, under diagrams/tables, or after code snippets
-   - Use format: `Sources: [filename.ext:start_line-end_line]()` for ranges, `Sources: [filename.ext:line_number]()` for single lines
+   - Use the exact format: `Sources: [filename.ext:start_line-end_line]()` for ranges, `Sources: [filename.ext:line_number]()` for single lines
    - Multiple files: `Sources: [file1.ext:1-10](), [file2.ext:5]()`
    - You MUST cite AT LEAST 5 different source files throughout the wiki page
 
-7. **Technical Accuracy:** All information must be derived SOLELY from the source files. Do not infer, invent, or use external knowledge.
+7. **Technical Accuracy:** All information must be derived SOLELY from the source files. Do not infer, invent, or use external knowledge. If information is not present, do not include it.
 
-8. **Clarity and Conciseness:** Use clear, professional technical language suitable for other developers.
+8. **Clarity and Conciseness:** Use clear, professional technical language suitable for developers.
 
-## When Done
+9. **Conclusion/Summary:** End with a brief summary paragraph reiterating key aspects covered.
+
+## When Complete
 
 Call `finalize_page` with:
-- title: The page title
-- content: Full markdown content (including details block, all sections, diagrams, citations)
-- source_files: List of all source files used (minimum 5)
+- title: "{page_title}"
+- content: The complete markdown content (starting with the <details> block)
+- source_files: List of all source files you referenced (minimum 5)
+
+IMPORTANT: Generate the content in English language. Ground every claim in the provided source files.
 '''
 
 
