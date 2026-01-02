@@ -317,8 +317,7 @@ class WikiGenerationService:
             wiki_data["sections"] = sections
             wiki_data["updated_at"] = datetime.now(timezone.utc)
 
-            success = await wiki_structure_repo.update_one(
-                "wiki_structures",
+            success = await self._wiki_structure_repo.update_one(
                 {"repository_id": str(repository_id)},
                 {"sections": sections, "updated_at": wiki_data["updated_at"]},
             )
