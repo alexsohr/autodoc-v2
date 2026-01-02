@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Annotated, Optional, List, TypedDict, Dict, Any
 from uuid import uuid4, UUID
 
+from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
 
 from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
@@ -403,3 +404,39 @@ async def finalize_node(state: WikiWorkflowState) -> Dict[str, Any]:
     return {
         "current_step": "completed",
     }
+
+
+# =============================================================================
+# Workflow Assembly
+# =============================================================================
+
+
+def create_wiki_workflow():
+    """Create and compile the wiki generation workflow.
+
+    The workflow follows a sequential pattern:
+    1. extract_structure: Analyze repo and create wiki structure
+    2. generate_pages: Generate content for all pages sequentially
+    3. finalize: Combine results and store to database
+
+    Returns:
+        Compiled LangGraph workflow
+    """
+    builder = StateGraph(WikiWorkflowState)
+
+    # Add nodes
+    builder.add_node("extract_structure", extract_structure_node)
+    builder.add_node("generate_pages", generate_pages_node)
+    builder.add_node("finalize", finalize_node)
+
+    # Add edges - simple sequential flow
+    builder.add_edge(START, "extract_structure")
+    builder.add_edge("extract_structure", "generate_pages")
+    builder.add_edge("generate_pages", "finalize")
+    builder.add_edge("finalize", END)
+
+    return builder.compile()
+
+
+# Create singleton workflow instance
+wiki_workflow = create_wiki_workflow()

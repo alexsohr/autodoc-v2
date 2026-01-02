@@ -550,3 +550,21 @@ async def test_finalize_node_save_failure():
 
         assert result["current_step"] == "error"
         assert "Failed to save wiki" in result.get("error", "")
+
+
+# =============================================================================
+# Tests for create_wiki_workflow (StateGraph assembly)
+# =============================================================================
+
+
+def test_wiki_workflow_compiles():
+    """wiki_workflow should compile without errors."""
+    from src.agents.wiki_workflow import create_wiki_workflow
+
+    workflow = create_wiki_workflow()
+
+    assert workflow is not None
+    # Check graph has expected nodes
+    assert "extract_structure" in str(workflow.nodes)
+    assert "generate_pages" in str(workflow.nodes)
+    assert "finalize" in str(workflow.nodes)
