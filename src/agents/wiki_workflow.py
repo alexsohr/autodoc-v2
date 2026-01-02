@@ -373,6 +373,72 @@ Remember: All file paths are absolute. Read files COMPLETELY, not just headers!
     }
 
 
+async def aggregate_node(state: WikiWorkflowState) -> Dict[str, Any]:
+    """Aggregate generated page content back into the wiki structure.
+
+    Merges the content from generated pages back into the corresponding
+    WikiPageDetail objects in the structure.
+
+    Args:
+        state: Current state with structure and generated pages
+
+    Returns:
+        Dict with updated 'structure' and 'current_step'
+    """
+    if state.get("error"):
+        return {
+            "error": state.get("error"),
+            "current_step": "error",
+        }
+
+    structure = state.get("structure")
+    pages = state.get("pages", [])
+
+    if not structure:
+        return {
+            "error": "No structure to aggregate into",
+            "current_step": "error",
+        }
+
+    # Build lookup of page content by id
+    content_by_id = {page.id: page.content for page in pages if page.content}
+
+    logger.info(
+        "Aggregating page content",
+        total_pages=len(pages),
+        pages_with_content=len(content_by_id),
+    )
+
+    # Update structure with generated content
+    updated_sections = []
+    for section in structure.sections:
+        updated_pages = []
+        for page in section.pages:
+            content = content_by_id.get(page.id, page.content)
+            updated_page = page.model_copy(update={"content": content})
+            updated_pages.append(updated_page)
+
+        updated_section = section.model_copy(update={"pages": updated_pages})
+        updated_sections.append(updated_section)
+
+    updated_structure = structure.model_copy(update={"sections": updated_sections})
+
+    # Count pages with content
+    all_pages = updated_structure.get_all_pages()
+    pages_with_content = [p for p in all_pages if p.content]
+
+    logger.info(
+        "Aggregation complete",
+        total_pages=len(all_pages),
+        pages_with_content=len(pages_with_content),
+    )
+
+    return {
+        "structure": updated_structure,
+        "current_step": "aggregated",
+    }
+
+
 async def finalize_node(state: WikiWorkflowState) -> Dict[str, Any]:
     """Finalize wiki by combining pages and storing to database.
 

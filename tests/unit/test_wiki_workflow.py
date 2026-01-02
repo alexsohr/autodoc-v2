@@ -713,3 +713,218 @@ async def test_generate_pages_node_uses_react_agent_per_page():
     assert mock_agent.ainvoke.call_count == 2
     # Should have 2 pages with content
     assert len(result.get("pages", [])) == 2
+
+
+# =============================================================================
+# Tests for aggregate_node
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_aggregate_node_merges_content_into_structure():
+    """Aggregate node should merge page content back into structure."""
+    from src.agents.wiki_workflow import aggregate_node
+    from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+    from uuid import UUID
+
+    # Structure without content
+    structure = WikiStructure(
+        id="wiki-test",
+        repository_id="12345678-1234-5678-1234-567812345678",
+        title="Test Wiki",
+        description="Test",
+        sections=[
+            WikiSection(
+                id="section-1",
+                title="Section 1",
+                pages=[
+                    WikiPageDetail(
+                        id="page-1",
+                        title="Page 1",
+                        description="First",
+                        importance=PageImportance.HIGH,
+                        file_paths=[],
+                        content="",  # Empty content, not None
+                    ),
+                ]
+            )
+        ]
+    )
+
+    # Pages with generated content
+    pages_with_content = [
+        WikiPageDetail(
+            id="page-1",
+            title="Page 1",
+            description="First",
+            importance=PageImportance.HIGH,
+            file_paths=[],
+            content="# Page 1\n\nThis is the content.",
+        )
+    ]
+
+    state = {
+        "repository_id": "12345678-1234-5678-1234-567812345678",
+        "clone_path": "/tmp/test",
+        "file_tree": "",
+        "readme_content": "",
+        "structure": structure,
+        "pages": pages_with_content,
+        "error": None,
+        "current_step": "pages_generated",
+    }
+
+    result = await aggregate_node(state)
+
+    assert result.get("current_step") == "aggregated"
+    # Verify content was merged into structure
+    updated_structure = result.get("structure")
+    assert updated_structure is not None
+    all_pages = updated_structure.get_all_pages()
+    assert len(all_pages) == 1
+    assert all_pages[0].content == "# Page 1\n\nThis is the content."
+
+
+@pytest.mark.asyncio
+async def test_aggregate_node_with_existing_error():
+    """Aggregate node should propagate existing errors."""
+    from src.agents.wiki_workflow import aggregate_node
+
+    state = {
+        "repository_id": "test-repo",
+        "clone_path": "/tmp/test",
+        "file_tree": "",
+        "readme_content": "",
+        "structure": None,
+        "pages": [],
+        "error": "Previous error occurred",
+        "current_step": "error",
+    }
+
+    result = await aggregate_node(state)
+
+    assert result["current_step"] == "error"
+    assert "Previous error" in result.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_aggregate_node_no_structure():
+    """Aggregate node should handle missing structure gracefully."""
+    from src.agents.wiki_workflow import aggregate_node
+
+    state = {
+        "repository_id": "test-repo",
+        "clone_path": "/tmp/test",
+        "file_tree": "",
+        "readme_content": "",
+        "structure": None,
+        "pages": [],
+        "error": None,
+        "current_step": "pages_generated",
+    }
+
+    result = await aggregate_node(state)
+
+    assert result["current_step"] == "error"
+    assert "No structure to aggregate" in result.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_aggregate_node_multiple_pages():
+    """Aggregate node should merge content for multiple pages across sections."""
+    from src.agents.wiki_workflow import aggregate_node
+    from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+
+    # Structure with multiple sections and pages
+    structure = WikiStructure(
+        id="wiki-test",
+        repository_id="12345678-1234-5678-1234-567812345678",
+        title="Test Wiki",
+        description="Test",
+        sections=[
+            WikiSection(
+                id="section-1",
+                title="Section 1",
+                pages=[
+                    WikiPageDetail(
+                        id="page-1",
+                        title="Page 1",
+                        description="First",
+                        importance=PageImportance.HIGH,
+                    ),
+                    WikiPageDetail(
+                        id="page-2",
+                        title="Page 2",
+                        description="Second",
+                        importance=PageImportance.MEDIUM,
+                    ),
+                ]
+            ),
+            WikiSection(
+                id="section-2",
+                title="Section 2",
+                pages=[
+                    WikiPageDetail(
+                        id="page-3",
+                        title="Page 3",
+                        description="Third",
+                        importance=PageImportance.LOW,
+                    ),
+                ]
+            )
+        ]
+    )
+
+    # Pages with generated content
+    pages_with_content = [
+        WikiPageDetail(
+            id="page-1",
+            title="Page 1",
+            description="First",
+            importance=PageImportance.HIGH,
+            content="# Page 1 Content",
+        ),
+        WikiPageDetail(
+            id="page-2",
+            title="Page 2",
+            description="Second",
+            importance=PageImportance.MEDIUM,
+            content="# Page 2 Content",
+        ),
+        WikiPageDetail(
+            id="page-3",
+            title="Page 3",
+            description="Third",
+            importance=PageImportance.LOW,
+            content="# Page 3 Content",
+        ),
+    ]
+
+    state = {
+        "repository_id": "12345678-1234-5678-1234-567812345678",
+        "clone_path": "/tmp/test",
+        "file_tree": "",
+        "readme_content": "",
+        "structure": structure,
+        "pages": pages_with_content,
+        "error": None,
+        "current_step": "pages_generated",
+    }
+
+    result = await aggregate_node(state)
+
+    assert result.get("current_step") == "aggregated"
+    updated_structure = result.get("structure")
+    assert updated_structure is not None
+
+    # Verify all pages have content
+    all_pages = updated_structure.get_all_pages()
+    assert len(all_pages) == 3
+    assert all_pages[0].content == "# Page 1 Content"
+    assert all_pages[1].content == "# Page 2 Content"
+    assert all_pages[2].content == "# Page 3 Content"
+
+    # Verify structure is preserved
+    assert len(updated_structure.sections) == 2
+    assert updated_structure.sections[0].id == "section-1"
+    assert updated_structure.sections[1].id == "section-2"
