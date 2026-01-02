@@ -125,3 +125,105 @@ def test_wiki_workflow_state_current_step_tracking():
             current_step=step,
         )
         assert state["current_step"] == step
+
+
+# =============================================================================
+# Tests for extract_structure_node
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_extract_structure_node_success():
+    """extract_structure_node should return structure from LLM."""
+    from unittest.mock import AsyncMock, patch
+    from src.agents.wiki_workflow import extract_structure_node, LLMWikiStructureSchema
+    from src.models.wiki import WikiSection, PageImportance
+
+    # Use a valid UUID for repository_id
+    test_repo_id = "00000000-0000-0000-0000-000000000000"
+
+    initial_state = WikiWorkflowState(
+        repository_id=test_repo_id,
+        clone_path="/tmp/repo",
+        file_tree="src/\n  main.py\n  utils.py",
+        readme_content="# Test Project\nA test project.",
+        structure=None,
+        pages=[],
+        error=None,
+        current_step="init",
+    )
+
+    # Mock the LLM output using the LLMWikiStructureSchema format
+    mock_llm_output = {
+        "title": "Test Project",
+        "description": "A test project",
+        "sections": [
+            {
+                "id": "overview",
+                "title": "Overview",
+                "pages": [
+                    {
+                        "id": "getting-started",
+                        "title": "Getting Started",
+                        "description": "How to get started",
+                        "importance": "high",
+                        "file_paths": ["src/main.py"],
+                    }
+                ]
+            }
+        ]
+    }
+
+    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
+        mock_llm = AsyncMock()
+        mock_llm.generate_structured.return_value = {
+            "status": "success",
+            "structured_output": mock_llm_output
+        }
+        MockLLMTool.return_value = mock_llm
+
+        result = await extract_structure_node(initial_state)
+
+        assert result["structure"] is not None
+        assert result["structure"].title == "Test Project"
+        assert result["current_step"] == "structure_extracted"
+        # Verify the structure was properly converted
+        assert len(result["structure"].sections) == 1
+        assert result["structure"].sections[0].id == "overview"
+        assert len(result["structure"].sections[0].pages) == 1
+        assert result["structure"].sections[0].pages[0].importance == PageImportance.HIGH
+
+
+@pytest.mark.asyncio
+async def test_extract_structure_node_error():
+    """extract_structure_node should handle LLM errors gracefully."""
+    from unittest.mock import AsyncMock, patch
+    from src.agents.wiki_workflow import extract_structure_node
+
+    # Use a valid UUID for repository_id
+    test_repo_id = "00000000-0000-0000-0000-000000000000"
+
+    initial_state = WikiWorkflowState(
+        repository_id=test_repo_id,
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=None,
+        pages=[],
+        error=None,
+        current_step="init",
+    )
+
+    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
+        mock_llm = AsyncMock()
+        mock_llm.generate_structured.return_value = {
+            "status": "error",
+            "error": "Rate limit exceeded"
+        }
+        MockLLMTool.return_value = mock_llm
+
+        result = await extract_structure_node(initial_state)
+
+        assert result["error"] is not None
+        assert "Rate limit" in result["error"]
+        assert result["current_step"] == "error"
