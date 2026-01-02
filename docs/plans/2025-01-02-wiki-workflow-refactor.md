@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace autonomous deep agents with a predictable LangGraph Map-Reduce workflow for wiki documentation generation.
+**Goal:** Replace autonomous deep agents with a predictable LangGraph sequential workflow for wiki documentation generation.
 
-**Architecture:** The new workflow uses LangGraph's Send API for parallel page generation. Structure extraction happens first (deterministic), then pages fan out for parallel generation, aggregate results, and finalize into a complete wiki. All prompts are preserved in YAML.
+**Architecture:** The new workflow uses LangGraph StateGraph with sequential page generation. Structure extraction happens first (deterministic), then pages are generated one-by-one in a loop, and finally the wiki is stored to the database. All prompts are preserved in YAML.
 
-**Tech Stack:** LangGraph StateGraph, Send API, Pydantic structured output, Beanie ODM, existing LLMTool
+**Tech Stack:** LangGraph StateGraph, Pydantic structured output, Beanie ODM, existing LLMTool
 
 ---
 
@@ -497,24 +497,24 @@ Loads prompts from wiki_prompts.yaml."
 
 ---
 
-### Task 7: Create Fan-Out Function
+### Task 7: Create Sequential Page Generation Node
 
-**Purpose:** Create function that returns Send objects for parallel page generation.
+**Purpose:** Node that generates content for all pages sequentially in a loop.
 
 **Files:**
 - Modify: `src/agents/wiki_workflow.py`
 - Test: `tests/unit/test_wiki_workflow.py`
 
-**Step 1: Write failing test for fan_out_pages**
+**Step 1: Write failing test for generate_pages_node**
 
 ```python
 # tests/unit/test_wiki_workflow.py
-from langgraph.types import Send
-from src.agents.wiki_workflow import fan_out_pages, WikiWorkflowState
+from src.agents.wiki_workflow import generate_pages_node, WikiWorkflowState
 from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
 
-def test_fan_out_pages_creates_send_objects():
-    """fan_out_pages should create Send object for each page."""
+@pytest.mark.asyncio
+async def test_generate_pages_node_success():
+    """generate_pages_node should generate content for all pages sequentially."""
     structure = WikiStructure(
         title="Test",
         description="Test wiki",
@@ -533,7 +533,7 @@ def test_fan_out_pages_creates_send_objects():
     state = WikiWorkflowState(
         repository_id="test-repo",
         clone_path="/tmp/repo",
-        file_tree="src/",
+        file_tree="src/\n  main.py",
         readme_content="# Test",
         structure=structure,
         pages=[],
@@ -541,172 +541,78 @@ def test_fan_out_pages_creates_send_objects():
         current_step="structure_extracted",
     )
 
-    sends = fan_out_pages(state)
+    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
+        mock_llm = AsyncMock()
+        mock_llm.generate.return_value = {
+            "status": "success",
+            "content": "# Generated Content\n\nThis is the generated content."
+        }
+        MockLLMTool.return_value = mock_llm
 
-    assert len(sends) == 2
-    assert all(isinstance(s, Send) for s in sends)
-    assert sends[0].node == "generate_page"
-    assert sends[0].arg["page"].id == "page1"
+        result = await generate_pages_node(state)
+
+        assert "pages" in result
+        assert len(result["pages"]) == 2
+        assert result["pages"][0].id == "page1"
+        assert result["pages"][0].content is not None
+        assert result["pages"][1].id == "page2"
+        assert result["current_step"] == "pages_generated"
 ```
 
 **Step 2: Run test to verify it fails**
 
 ```bash
-pytest tests/unit/test_wiki_workflow.py::test_fan_out_pages_creates_send_objects -v
+pytest tests/unit/test_wiki_workflow.py::test_generate_pages_node_success -v
 ```
 Expected: FAIL - function doesn't exist
 
-**Step 3: Implement fan_out_pages**
+**Step 3: Implement generate_pages_node**
 
 Add to `src/agents/wiki_workflow.py`:
 
 ```python
-from langgraph.types import Send
-from typing import List
+async def generate_pages_node(state: WikiWorkflowState) -> dict:
+    """Generate content for all wiki pages sequentially.
 
-
-def fan_out_pages(state: WikiWorkflowState) -> List[Send]:
-    """Create parallel tasks for each page in the wiki structure.
-
-    This is the fan-out step of the Map-Reduce pattern. Each page
-    gets its own Send object targeting the generate_page node.
+    Iterates through all pages in the structure and generates
+    markdown content for each one using the LLM.
 
     Args:
         state: Current state with extracted structure
 
     Returns:
-        List of Send objects for parallel page generation
+        Dict with 'pages' list and updated 'current_step'
     """
     if state.get("error") or not state.get("structure"):
-        # Skip fan-out if there's an error or no structure
-        return [Send("finalize", {})]
+        return {
+            "error": state.get("error", "No structure available"),
+            "current_step": "error",
+        }
 
     structure = state["structure"]
-    sends = []
-
-    for page in structure.get_all_pages():
-        sends.append(Send("generate_page", {
-            "page": page,
-            "clone_path": state["clone_path"],
-            "file_tree": state["file_tree"],
-            "readme_content": state["readme_content"],
-            "repository_id": state["repository_id"],
-        }))
-
-    return sends
-```
-
-**Step 4: Run test to verify it passes**
-
-```bash
-pytest tests/unit/test_wiki_workflow.py::test_fan_out_pages_creates_send_objects -v
-```
-Expected: PASS
-
-**Step 5: Commit**
-
-```bash
-git add src/agents/wiki_workflow.py tests/unit/test_wiki_workflow.py
-git commit -m "feat(wiki): add fan_out_pages for parallel page generation
-
-Creates Send objects for each page in structure."
-```
-
----
-
-### Task 8: Create Page Generation Node
-
-**Purpose:** Node that generates content for a single page.
-
-**Files:**
-- Modify: `src/agents/wiki_workflow.py`
-- Test: `tests/unit/test_wiki_workflow.py`
-
-**Step 1: Write failing test for generate_page_node**
-
-```python
-# tests/unit/test_wiki_workflow.py
-@pytest.mark.asyncio
-async def test_generate_page_node_success():
-    """generate_page_node should generate content for a single page."""
-    page = WikiPageDetail(
-        id="getting-started",
-        title="Getting Started",
-        description="How to get started with the project",
-        importance=PageImportance.HIGH,
-        file_paths=["src/main.py"],
-    )
-
-    page_state = {
-        "page": page,
-        "clone_path": "/tmp/repo",
-        "file_tree": "src/\n  main.py",
-        "readme_content": "# Test",
-        "repository_id": "test-repo",
-    }
-
-    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
-        mock_llm = AsyncMock()
-        mock_llm.generate.return_value = {
-            "status": "success",
-            "content": "# Getting Started\n\nThis is the generated content."
-        }
-        MockLLMTool.return_value = mock_llm
-
-        result = await generate_page_node(page_state)
-
-        assert "pages" in result
-        assert len(result["pages"]) == 1
-        assert result["pages"][0].id == "getting-started"
-        assert result["pages"][0].content is not None
-```
-
-**Step 2: Run test to verify it fails**
-
-```bash
-pytest tests/unit/test_wiki_workflow.py::test_generate_page_node_success -v
-```
-Expected: FAIL - function doesn't exist
-
-**Step 3: Implement generate_page_node**
-
-Add to `src/agents/wiki_workflow.py`:
-
-```python
-async def generate_page_node(state: dict) -> dict:
-    """Generate content for a single wiki page.
-
-    This node runs in parallel for each page. It receives page details
-    and repository context, then uses LLM to generate markdown content.
-
-    Args:
-        state: Dict containing 'page', 'clone_path', 'file_tree', etc.
-
-    Returns:
-        Dict with 'pages' list containing the page with generated content
-    """
-    page: WikiPageDetail = state["page"]
     clone_path = state["clone_path"]
     file_tree = state["file_tree"]
 
     llm_tool = LLMTool()
-
-    # Build page generation prompt
     system_prompt = PROMPTS["page_generation_full"]["system_prompt"]
 
-    # Read relevant files if specified
-    file_contents = ""
-    if page.file_paths:
-        for file_path in page.file_paths[:5]:  # Limit to 5 files
-            full_path = Path(clone_path) / file_path
-            if full_path.exists() and full_path.is_file():
-                try:
-                    content = full_path.read_text(encoding="utf-8", errors="ignore")
-                    file_contents += f"\n\n### File: {file_path}\n```\n{content[:5000]}\n```"
-                except Exception:
-                    pass
+    generated_pages = []
+    all_pages = structure.get_all_pages()
 
-    user_prompt = f"""Generate comprehensive documentation for this wiki page.
+    for page in all_pages:
+        # Read relevant files if specified
+        file_contents = ""
+        if page.file_paths:
+            for file_path in page.file_paths[:5]:  # Limit to 5 files
+                full_path = Path(clone_path) / file_path
+                if full_path.exists() and full_path.is_file():
+                    try:
+                        content = full_path.read_text(encoding="utf-8", errors="ignore")
+                        file_contents += f"\n\n### File: {file_path}\n```\n{content[:5000]}\n```"
+                    except Exception:
+                        pass
+
+        user_prompt = f"""Generate comprehensive documentation for this wiki page.
 
 ## Page Details
 - Title: {page.title}
@@ -723,38 +629,72 @@ async def generate_page_node(state: dict) -> dict:
 
 Generate the markdown content for this page."""
 
-    result = await llm_tool.generate(
-        prompt=user_prompt,
-        system_message=system_prompt,
-    )
+        result = await llm_tool.generate(
+            prompt=user_prompt,
+            system_message=system_prompt,
+        )
 
-    if result["status"] == "error":
-        # Return page with error note in content
-        page_with_content = page.model_copy(update={
-            "content": f"*Error generating content: {result.get('error', 'Unknown')}*"
-        })
-    else:
-        page_with_content = page.model_copy(update={
-            "content": result["content"]
-        })
+        if result["status"] == "error":
+            page_with_content = page.model_copy(update={
+                "content": f"*Error generating content: {result.get('error', 'Unknown')}*"
+            })
+        else:
+            page_with_content = page.model_copy(update={
+                "content": result["content"]
+            })
 
-    return {"pages": [page_with_content]}
+        generated_pages.append(page_with_content)
+
+    return {
+        "pages": generated_pages,
+        "current_step": "pages_generated",
+    }
 ```
 
 **Step 4: Run test to verify it passes**
 
 ```bash
-pytest tests/unit/test_wiki_workflow.py::test_generate_page_node_success -v
+pytest tests/unit/test_wiki_workflow.py::test_generate_pages_node_success -v
 ```
 Expected: PASS
 
-**Step 5: Commit**
+**Step 5: Add error handling test**
+
+```python
+@pytest.mark.asyncio
+async def test_generate_pages_node_no_structure():
+    """generate_pages_node should handle missing structure gracefully."""
+    state = WikiWorkflowState(
+        repository_id="test-repo",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=None,
+        pages=[],
+        error=None,
+        current_step="init",
+    )
+
+    result = await generate_pages_node(state)
+
+    assert result["current_step"] == "error"
+    assert "No structure" in result.get("error", "")
+```
+
+**Step 6: Run all page generation tests**
+
+```bash
+pytest tests/unit/test_wiki_workflow.py -k "generate_pages" -v
+```
+Expected: All PASS
+
+**Step 7: Commit**
 
 ```bash
 git add src/agents/wiki_workflow.py tests/unit/test_wiki_workflow.py
-git commit -m "feat(wiki): add generate_page_node for content generation
+git commit -m "feat(wiki): add generate_pages_node for sequential content generation
 
-Generates markdown content for single page using LLM."
+Generates markdown content for all pages in a loop using LLM."
 ```
 
 ---
@@ -930,9 +870,9 @@ Combines generated pages and persists WikiStructure to MongoDB."
 
 ## Phase 5: Graph Assembly
 
-### Task 11: Assemble LangGraph Workflow
+### Task 8: Assemble LangGraph Workflow
 
-**Purpose:** Connect all nodes into complete workflow graph.
+**Purpose:** Connect all nodes into complete sequential workflow graph.
 
 **Files:**
 - Modify: `src/agents/wiki_workflow.py`
@@ -951,7 +891,7 @@ def test_wiki_workflow_compiles():
     assert workflow is not None
     # Check graph has expected nodes
     assert "extract_structure" in str(workflow.nodes)
-    assert "generate_page" in str(workflow.nodes)
+    assert "generate_pages" in str(workflow.nodes)
     assert "finalize" in str(workflow.nodes)
 ```
 
@@ -973,11 +913,10 @@ from langgraph.graph import StateGraph, START, END
 def create_wiki_workflow():
     """Create and compile the wiki generation workflow.
 
-    The workflow follows a Map-Reduce pattern:
+    The workflow follows a sequential pattern:
     1. extract_structure: Analyze repo and create wiki structure
-    2. fan_out_pages: Create parallel tasks for each page
-    3. generate_page: Generate content (runs in parallel)
-    4. finalize: Combine results and store to database
+    2. generate_pages: Generate content for all pages sequentially
+    3. finalize: Combine results and store to database
 
     Returns:
         Compiled LangGraph workflow
@@ -986,17 +925,13 @@ def create_wiki_workflow():
 
     # Add nodes
     builder.add_node("extract_structure", extract_structure_node)
-    builder.add_node("generate_page", generate_page_node)
+    builder.add_node("generate_pages", generate_pages_node)
     builder.add_node("finalize", finalize_node)
 
-    # Add edges
+    # Add edges - simple sequential flow
     builder.add_edge(START, "extract_structure")
-    builder.add_conditional_edges(
-        "extract_structure",
-        fan_out_pages,
-        ["generate_page", "finalize"]  # finalize for error case
-    )
-    builder.add_edge("generate_page", "finalize")
+    builder.add_edge("extract_structure", "generate_pages")
+    builder.add_edge("generate_pages", "finalize")
     builder.add_edge("finalize", END)
 
     return builder.compile()
@@ -1017,16 +952,16 @@ Expected: PASS
 
 ```bash
 git add src/agents/wiki_workflow.py tests/unit/test_wiki_workflow.py
-git commit -m "feat(wiki): assemble LangGraph workflow with Map-Reduce pattern
+git commit -m "feat(wiki): assemble LangGraph sequential workflow
 
-Connects extract_structure -> fan_out -> generate_page -> finalize."
+Connects extract_structure -> generate_pages -> finalize."
 ```
 
 ---
 
 ## Phase 6: Integration
 
-### Task 12: Update WikiGenerationAgent to Use New Workflow
+### Task 9: Update WikiGenerationAgent to Use New Workflow
 
 **Purpose:** Replace deep agent calls with new workflow invocation.
 
@@ -1146,7 +1081,7 @@ Replaces deep agent with LangGraph Map-Reduce workflow."
 
 ---
 
-### Task 13: Remove Deep Agent Dependencies
+### Task 10: Remove Deep Agent Dependencies
 
 **Purpose:** Clean up imports and dependencies on deprecated code.
 
@@ -1182,114 +1117,12 @@ Cleanup after wiki workflow refactor."
 
 ---
 
-## Phase 7: Validation
-
-### Task 14: End-to-End Test
-
-**Purpose:** Validate complete workflow with real repository.
-
-**Files:**
-- Create: `tests/e2e/test_wiki_generation_e2e.py`
-
-**Step 1: Create E2E test**
-
-```python
-# tests/e2e/test_wiki_generation_e2e.py
-import pytest
-from pathlib import Path
-
-@pytest.mark.e2e
-@pytest.mark.asyncio
-async def test_wiki_generation_e2e():
-    """End-to-end test of wiki generation workflow."""
-    from src.agents.wiki_workflow import wiki_workflow, WikiWorkflowState
-
-    # Use a simple test repository (could be fixture)
-    test_repo_path = Path(__file__).parent / "fixtures" / "sample_repo"
-
-    if not test_repo_path.exists():
-        pytest.skip("Test repository fixture not available")
-
-    file_tree = "src/\n  main.py\n  utils.py\nREADME.md"
-    readme = "# Sample Project\nA sample project for testing."
-
-    state = WikiWorkflowState(
-        repository_id="e2e-test-repo",
-        clone_path=str(test_repo_path),
-        file_tree=file_tree,
-        readme_content=readme,
-        structure=None,
-        pages=[],
-        error=None,
-        current_step="init",
-    )
-
-    result = await wiki_workflow.ainvoke(state)
-
-    assert result["current_step"] == "completed"
-    assert result.get("error") is None
-    assert result.get("structure") is not None
-    assert len(result.get("pages", [])) > 0
-```
-
-**Step 2: Run E2E test (manual)**
-
-```bash
-pytest tests/e2e/test_wiki_generation_e2e.py -v -s
-```
-
-**Step 3: Commit**
-
-```bash
-git add tests/e2e/
-git commit -m "test: add e2e test for wiki generation workflow"
-```
-
----
-
-### Task 15: Final Cleanup and Documentation
-
-**Purpose:** Update documentation and clean up temporary code.
-
-**Files:**
-- Update: `CLAUDE.md` if needed
-- Update: `docs/proposals/` to mark as implemented
-- Delete: Temporary test fixtures if any
-
-**Step 1: Update proposal status**
-
-Edit `docs/proposals/2025-01-02-wiki-agent-orchestration-proposal.md`:
-- Change status from "Draft for Review" to "Implemented"
-
-**Step 2: Run full test suite**
-
-```bash
-pytest tests/ -v
-```
-Expected: All PASS
-
-**Step 3: Final commit**
-
-```bash
-git add -A
-git commit -m "docs: mark wiki orchestration proposal as implemented
-
-All phases completed:
-- Deep agent archived
-- Map-Reduce workflow implemented
-- Integration complete
-- E2E tests passing"
-```
-
----
-
 ## Summary
 
 ### Files Created
 - `src/agents/wiki_workflow.py` - New LangGraph workflow
 - `tests/unit/test_wiki_workflow.py` - Unit tests
 - `tests/integration/test_wiki_workflow_integration.py` - Integration tests
-- `tests/e2e/test_wiki_generation_e2e.py` - E2E tests
 
 ### Files Modified
 - `src/models/wiki.py` - Added content field to WikiPageDetail
@@ -1307,7 +1140,6 @@ All phases completed:
 
 ### Key Patterns
 - LangGraph StateGraph with TypedDict state
-- Send API for parallel page generation
-- State reducer (operator.add) for collecting pages
+- Sequential page generation loop
 - Pydantic structured output for structure extraction
 - YAML-based prompt management
