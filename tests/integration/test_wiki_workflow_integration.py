@@ -4,9 +4,7 @@ Tests the full wiki generation workflow with mocked MCP tools and LLM responses
 to verify state transitions and data flow through the workflow nodes.
 """
 
-import operator
 import pytest
-from typing import Annotated, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -26,22 +24,6 @@ from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImpo
 def anyio_backend():
     """Use asyncio backend only."""
     return "asyncio"
-
-
-@pytest.fixture
-def mock_mcp_tools():
-    """Create mock MCP tools that simulate filesystem operations."""
-    mock_read_file = MagicMock()
-    mock_read_file.name = "read_text_file"
-    mock_read_file.ainvoke = AsyncMock(
-        return_value="# Sample file content\nclass Example:\n    pass"
-    )
-
-    mock_list_dir = MagicMock()
-    mock_list_dir.name = "list_directory"
-    mock_list_dir.ainvoke = AsyncMock(return_value=["src/", "tests/", "README.md"])
-
-    return [mock_read_file, mock_list_dir]
 
 
 @pytest.fixture
@@ -202,8 +184,12 @@ class TestExtractStructureNode:
             "src.agents.wiki_workflow.create_structure_agent",
             new_callable=AsyncMock,
             return_value=mock_agent,
-        ):
+        ) as mock_create_agent:
             result = await extract_structure_node(sample_initial_state)
+
+            # Verify agent was created and called
+            mock_create_agent.assert_called_once()
+            mock_agent.ainvoke.assert_called_once()
 
             assert result["current_step"] == "structure_extracted"
             assert result.get("error") is None
@@ -227,8 +213,12 @@ class TestExtractStructureNode:
             "src.agents.wiki_workflow.create_structure_agent",
             new_callable=AsyncMock,
             return_value=mock_agent,
-        ):
+        ) as mock_create_agent:
             result = await extract_structure_node(sample_initial_state)
+
+            # Verify agent was created and called
+            mock_create_agent.assert_called_once()
+            mock_agent.ainvoke.assert_called_once()
 
             assert result["current_step"] == "error"
             assert result["error"] is not None
@@ -245,8 +235,12 @@ class TestExtractStructureNode:
             "src.agents.wiki_workflow.create_structure_agent",
             new_callable=AsyncMock,
             return_value=mock_agent,
-        ):
+        ) as mock_create_agent:
             result = await extract_structure_node(sample_initial_state)
+
+            # Verify agent was created and called
+            mock_create_agent.assert_called_once()
+            mock_agent.ainvoke.assert_called_once()
 
             assert result["current_step"] == "error"
             assert result["error"] is not None
@@ -281,8 +275,12 @@ class TestGeneratePagesNode:
             "src.agents.wiki_workflow.create_page_agent",
             new_callable=AsyncMock,
             return_value=mock_agent,
-        ):
+        ) as mock_create_agent:
             result = await generate_pages_node(state_with_structure)
+
+            # Verify agent was created and called for each page (2 pages)
+            mock_create_agent.assert_called_once()
+            assert mock_agent.ainvoke.call_count == 2
 
             assert result["current_step"] == "pages_generated"
             assert result.get("error") is None
@@ -334,8 +332,12 @@ class TestGeneratePagesNode:
             "src.agents.wiki_workflow.create_page_agent",
             new_callable=AsyncMock,
             return_value=mock_agent,
-        ):
+        ) as mock_create_agent:
             result = await generate_pages_node(state_with_structure)
+
+            # Verify agent was created and called for each page
+            mock_create_agent.assert_called_once()
+            assert mock_agent.ainvoke.call_count == 2
 
             assert result["current_step"] == "pages_generated"
             # Pages should be generated but with error content
@@ -394,16 +396,18 @@ class TestAggregateNode:
     @pytest.mark.integration
     @pytest.mark.anyio
     async def test_aggregate_with_existing_error(self, sample_initial_state):
-        """Test aggregate preserves existing error state."""
+        """Test aggregate preserves existing error state and message."""
+        error_message = "Previous error from structure extraction"
         state_with_error = {
             **sample_initial_state,
-            "error": "Previous error",
+            "error": error_message,
             "current_step": "error",
         }
 
         result = await aggregate_node(state_with_error)
 
         assert result["current_step"] == "error"
+        assert result["error"] == error_message
 
     @pytest.mark.integration
     @pytest.mark.anyio
@@ -494,11 +498,10 @@ class TestFullWorkflowIntegration:
     @pytest.mark.anyio
     async def test_full_workflow_with_mocked_agents(
         self,
-        mock_mcp_tools,
         mock_llm_structure_response,
         sample_initial_state,
     ):
-        """Test full workflow with mocked MCP client and LLM."""
+        """Test full workflow with mocked agents and repository."""
         # Mock the structure agent
         mock_structure_agent = MagicMock()
         mock_structure_agent.ainvoke = AsyncMock(
@@ -522,24 +525,29 @@ class TestFullWorkflowIntegration:
         mock_repo = MagicMock()
         mock_repo.upsert = AsyncMock()
 
+        # Note: No need to patch get_mcp_tools since we're mocking the agent factories
+        # themselves. The agents are fully mocked, so get_mcp_tools is never called.
         with patch(
-            "src.agents.wiki_react_agents.get_mcp_tools",
-            new_callable=AsyncMock,
-            return_value=mock_mcp_tools,
-        ), patch(
             "src.agents.wiki_workflow.create_structure_agent",
             new_callable=AsyncMock,
             return_value=mock_structure_agent,
-        ), patch(
+        ) as mock_create_structure, patch(
             "src.agents.wiki_workflow.create_page_agent",
             new_callable=AsyncMock,
             return_value=mock_page_agent,
-        ), patch(
+        ) as mock_create_page, patch(
             "src.agents.wiki_workflow.WikiStructureRepository",
             return_value=mock_repo,
         ):
             workflow = create_wiki_workflow()
             result = await workflow.ainvoke(sample_initial_state)
+
+            # Verify agents were created and called
+            mock_create_structure.assert_called_once()
+            mock_structure_agent.ainvoke.assert_called_once()
+            mock_create_page.assert_called_once()
+            # Page agent called for each page (2 pages in the mock structure)
+            assert mock_page_agent.ainvoke.call_count == 2
 
             # Verify workflow completed
             assert result["current_step"] == "completed"
@@ -570,9 +578,13 @@ class TestFullWorkflowIntegration:
             "src.agents.wiki_workflow.create_structure_agent",
             new_callable=AsyncMock,
             return_value=mock_structure_agent,
-        ):
+        ) as mock_create_structure:
             workflow = create_wiki_workflow()
             result = await workflow.ainvoke(sample_initial_state)
+
+            # Verify agent was created and called (even though it failed)
+            mock_create_structure.assert_called_once()
+            mock_structure_agent.ainvoke.assert_called_once()
 
             # Verify error is captured and workflow reaches end state
             # Note: Due to LangGraph's sequential flow, workflow may still
@@ -608,16 +620,23 @@ class TestFullWorkflowIntegration:
             "src.agents.wiki_workflow.create_structure_agent",
             new_callable=AsyncMock,
             return_value=mock_structure_agent,
-        ), patch(
+        ) as mock_create_structure, patch(
             "src.agents.wiki_workflow.create_page_agent",
             new_callable=AsyncMock,
             return_value=mock_page_agent,
-        ), patch(
+        ) as mock_create_page, patch(
             "src.agents.wiki_workflow.WikiStructureRepository",
             return_value=mock_repo,
         ):
             workflow = create_wiki_workflow()
             result = await workflow.ainvoke(sample_initial_state)
+
+            # Verify agents were called
+            mock_create_structure.assert_called_once()
+            mock_structure_agent.ainvoke.assert_called_once()
+            mock_create_page.assert_called_once()
+            # Page agent called for each page (2 pages), but all fail
+            assert mock_page_agent.ainvoke.call_count == 2
 
             # Pages should have error content but workflow should complete
             assert result["pages"] is not None
@@ -635,9 +654,12 @@ class TestFullWorkflowIntegration:
         mock_llm_structure_response,
         sample_initial_state,
     ):
-        """Test workflow progresses through expected state transitions."""
-        state_history = []
+        """Test workflow progresses through expected state and reaches completion.
 
+        This test verifies the actual workflow implementation by running the
+        real workflow graph and verifying the final state reflects all
+        intermediate transitions were successful.
+        """
         mock_structure_agent = MagicMock()
         mock_structure_agent.ainvoke = AsyncMock(
             return_value={
@@ -656,80 +678,37 @@ class TestFullWorkflowIntegration:
         mock_repo = MagicMock()
         mock_repo.upsert = AsyncMock()
 
-        # Create interceptor to track state changes
-        original_extract = extract_structure_node
-        original_generate = generate_pages_node
-        original_aggregate = aggregate_node
-        original_finalize = finalize_node
-
-        async def track_extract(state):
-            result = await original_extract(state)
-            state_history.append(("extract_structure", result.get("current_step")))
-            return result
-
-        async def track_generate(state):
-            result = await original_generate(state)
-            state_history.append(("generate_pages", result.get("current_step")))
-            return result
-
-        async def track_aggregate(state):
-            result = await original_aggregate(state)
-            state_history.append(("aggregate", result.get("current_step")))
-            return result
-
-        async def track_finalize(state):
-            result = await original_finalize(state)
-            state_history.append(("finalize", result.get("current_step")))
-            return result
-
         with patch(
             "src.agents.wiki_workflow.create_structure_agent",
             new_callable=AsyncMock,
             return_value=mock_structure_agent,
-        ), patch(
+        ) as mock_create_structure, patch(
             "src.agents.wiki_workflow.create_page_agent",
             new_callable=AsyncMock,
             return_value=mock_page_agent,
-        ), patch(
+        ) as mock_create_page, patch(
             "src.agents.wiki_workflow.WikiStructureRepository",
             return_value=mock_repo,
-        ), patch(
-            "src.agents.wiki_workflow.extract_structure_node",
-            side_effect=track_extract,
-        ), patch(
-            "src.agents.wiki_workflow.generate_pages_node",
-            side_effect=track_generate,
-        ), patch(
-            "src.agents.wiki_workflow.aggregate_node",
-            side_effect=track_aggregate,
-        ), patch(
-            "src.agents.wiki_workflow.finalize_node",
-            side_effect=track_finalize,
         ):
-            # Need to recreate workflow after patching nodes
-            from langgraph.graph import StateGraph, START, END
-
-            builder = StateGraph(WikiWorkflowState)
-            builder.add_node("extract_structure", track_extract)
-            builder.add_node("generate_pages", track_generate)
-            builder.add_node("aggregate", track_aggregate)
-            builder.add_node("finalize", track_finalize)
-            builder.add_edge(START, "extract_structure")
-            builder.add_edge("extract_structure", "generate_pages")
-            builder.add_edge("generate_pages", "aggregate")
-            builder.add_edge("aggregate", "finalize")
-            builder.add_edge("finalize", END)
-            workflow = builder.compile()
-
+            # Use the actual workflow from the module
+            workflow = create_wiki_workflow()
             result = await workflow.ainvoke(sample_initial_state)
 
-            # Verify state transitions
-            expected_steps = [
-                ("extract_structure", "structure_extracted"),
-                ("generate_pages", "pages_generated"),
-                ("aggregate", "aggregated"),
-                ("finalize", "completed"),
-            ]
+            # Verify all agents and repository were called (proves all nodes executed)
+            mock_create_structure.assert_called_once()
+            mock_structure_agent.ainvoke.assert_called_once()
+            mock_create_page.assert_called_once()
+            # Page agent called for each page (2 pages in the mock structure)
+            assert mock_page_agent.ainvoke.call_count == 2
+            mock_repo.upsert.assert_called_once()
 
-            assert state_history == expected_steps
+            # Verify final state reflects successful completion
             assert result["current_step"] == "completed"
+            assert result["error"] is None
+
+            # Verify structure was properly extracted and aggregated
+            assert result["structure"] is not None
+            assert result["structure"].title == "Test Project Wiki"
+
+            # Verify pages were generated
+            assert len(result["pages"]) == 2
