@@ -20,8 +20,7 @@ from pydantic import BaseModel, Field
 
 from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
 from src.repository.wiki_structure_repository import WikiStructureRepository
-from src.tools.llm_tool import LLMTool
-from src.agents.wiki_react_agents import create_structure_agent
+from src.agents.wiki_react_agents import create_structure_agent, create_page_agent
 
 logger = structlog.get_logger(__name__)
 
@@ -252,10 +251,11 @@ Use the filesystem tools to examine actual source files before finalizing the st
 
 
 async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
-    """Generate content for all wiki pages sequentially.
+    """Generate content for all wiki pages sequentially using React agents.
 
-    Iterates through all pages in the structure and generates
-    markdown content for each one using the LLM.
+    Creates a React agent with MCP filesystem tools and invokes it
+    for each page in sequence. The agent can read source files to
+    generate accurate, source-grounded documentation.
 
     Args:
         state: Current state with extracted structure
@@ -278,74 +278,94 @@ async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
 
     structure = state["structure"]
     clone_path = state["clone_path"]
-    file_tree = state["file_tree"]
-    readme_content = state.get("readme_content", "")
 
-    llm_tool = LLMTool()
-    # Use simple prompt that doesn't expect tool calls
-    # (page_generation_full expects MCP filesystem tools which aren't bound here)
-    system_prompt = PROMPTS["page_generation_simple"]["system_prompt"]
+    # Create React agent with MCP tools (reused for all pages)
+    agent = await create_page_agent(clone_path=clone_path)
 
     generated_pages = []
     all_pages = structure.get_all_pages()
 
-    for page in all_pages:
-        # Read relevant files if specified
-        file_contents = ""
-        if page.file_paths:
-            for file_path in page.file_paths[:5]:  # Limit to 5 files
-                full_path = Path(clone_path) / file_path
-                if full_path.exists() and full_path.is_file():
-                    try:
-                        content = full_path.read_text(encoding="utf-8", errors="ignore")
-                        file_contents += f"\n\n### File: {file_path}\n```\n{content[:5000]}\n```"
-                    except Exception:
-                        pass
+    logger.info(
+        "Starting sequential page generation",
+        total_pages=len(all_pages),
+        clone_path=clone_path,
+    )
 
-        # Build context-rich user prompt
-        readme_section = ""
-        if readme_content:
-            # Truncate readme if too long
-            truncated_readme = readme_content[:3000] if len(readme_content) > 3000 else readme_content
-            readme_section = f"""
-## Repository README
-{truncated_readme}
-"""
+    for idx, page in enumerate(all_pages):
+        logger.info(
+            "Generating page",
+            page_id=page.id,
+            page_title=page.title,
+            progress=f"{idx + 1}/{len(all_pages)}",
+        )
 
-        user_prompt = f"""Generate comprehensive documentation for this wiki page.
+        # Build user message for this page
+        file_list = "\n".join(f"- {clone_path}/{fp}" for fp in page.file_paths) if page.file_paths else "No specific files assigned"
+
+        user_message = f"""Generate comprehensive documentation for this wiki page.
 
 ## Page Details
 - Title: {page.title}
 - Description: {page.description}
 - Importance: {page.importance.value if hasattr(page.importance, 'value') else page.importance}
-{readme_section}
-## Repository File Tree
-```
-{file_tree}
-```
 
-## Relevant Source Files
-{file_contents if file_contents else "No specific files referenced."}
+## Files to Read (MUST READ ALL COMPLETELY)
+{file_list}
 
-Generate the markdown content for this page. Start with `# {page.title}` as the main heading."""
+## CRITICAL Instructions
 
-        # IMPORTANT: Use generate_text, not generate
-        result = await llm_tool.generate_text(
-            prompt=user_prompt,
-            system_message=system_prompt,
-        )
+1. **READ ALL FILES COMPLETELY** - Use read_file WITHOUT the head parameter
+   - You need full implementation details, not just headers
+   - Read each file in the list above in its entirety
 
-        if result["status"] == "error":
-            page_with_content = page.model_copy(update={
-                "content": f"*Error generating content: {result.get('error', 'Unknown')}*"
+2. **Understand the implementation** - After reading:
+   - Data structures and their purposes
+   - Function logic and data flow
+   - Error handling patterns
+   - Integration with other components
+
+3. **Generate comprehensive documentation** including:
+   - Clear explanation with implementation details
+   - Mermaid diagrams (use graph TD, never LR)
+   - Actual code snippets from source files
+   - Source citations: Sources: [filename:line-range]()
+
+4. **Start output with:** # {page.title}
+
+Remember: All file paths are absolute. Read files COMPLETELY, not just headers!
+"""
+
+        try:
+            result = await agent.ainvoke({
+                "messages": [{"role": "user", "content": user_message}]
             })
-        else:
-            # IMPORTANT: Use "generated_text" not "content"
+
+            # Extract content from last message
+            messages = result.get("messages", [])
+            content = ""
+            if messages:
+                last_message = messages[-1]
+                content = last_message.content if hasattr(last_message, 'content') else str(last_message)
+
+            page_with_content = page.model_copy(update={"content": content})
+
+        except Exception as e:
+            logger.error(
+                "Page generation failed",
+                page_id=page.id,
+                error=str(e),
+            )
             page_with_content = page.model_copy(update={
-                "content": result["generated_text"]
+                "content": f"*Error generating content: {str(e)}*"
             })
 
         generated_pages.append(page_with_content)
+
+    logger.info(
+        "Page generation complete",
+        total_pages=len(generated_pages),
+        pages_with_content=len([p for p in generated_pages if p.content]),
+    )
 
     return {
         "pages": generated_pages,

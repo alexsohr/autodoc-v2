@@ -235,7 +235,7 @@ async def test_extract_structure_node_error():
 @pytest.mark.asyncio
 async def test_generate_pages_node_success():
     """generate_pages_node should generate content for all pages sequentially."""
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock, patch, MagicMock
     from src.agents.wiki_workflow import generate_pages_node
     from src.models.wiki import WikiSection, PageImportance
 
@@ -277,14 +277,13 @@ async def test_generate_pages_node_success():
         current_step="structure_extracted",
     )
 
-    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
-        mock_llm = AsyncMock()
-        # Note: generate_text returns "generated_text" not "content"
-        mock_llm.generate_text.return_value = {
-            "status": "success",
-            "generated_text": "# Generated Content\n\nThis is the generated content."
+    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
+        mock_agent = AsyncMock()
+        # React agent returns messages with content
+        mock_agent.ainvoke.return_value = {
+            "messages": [MagicMock(content="# Generated Content\n\nThis is the generated content.")]
         }
-        MockLLMTool.return_value = mock_llm
+        mock_create.return_value = mock_agent
 
         result = await generate_pages_node(state)
 
@@ -342,8 +341,8 @@ async def test_generate_pages_node_with_existing_error():
 
 
 @pytest.mark.asyncio
-async def test_generate_pages_node_llm_error():
-    """generate_pages_node should handle LLM errors and include error message in content."""
+async def test_generate_pages_node_agent_error():
+    """generate_pages_node should handle agent errors and include error message in content."""
     from unittest.mock import AsyncMock, patch
     from src.agents.wiki_workflow import generate_pages_node
     from src.models.wiki import WikiSection, PageImportance
@@ -380,13 +379,11 @@ async def test_generate_pages_node_llm_error():
         current_step="structure_extracted",
     )
 
-    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
-        mock_llm = AsyncMock()
-        mock_llm.generate_text.return_value = {
-            "status": "error",
-            "error": "Rate limit exceeded"
-        }
-        MockLLMTool.return_value = mock_llm
+    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
+        mock_agent = AsyncMock()
+        # Agent raises an exception
+        mock_agent.ainvoke.side_effect = Exception("Rate limit exceeded")
+        mock_create.return_value = mock_agent
 
         result = await generate_pages_node(state)
 
@@ -646,3 +643,73 @@ async def test_extract_structure_node_no_structured_output():
     assert result.get("error") is not None
     assert "did not return structured output" in result["error"]
     assert result["current_step"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_generate_pages_node_uses_react_agent_per_page():
+    """Page generation should invoke React agent for each page sequentially."""
+    from src.agents.wiki_workflow import generate_pages_node
+    from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+    from uuid import UUID
+    from unittest.mock import patch, AsyncMock, MagicMock
+
+    # Create a structure with 2 pages
+    structure = WikiStructure(
+        id="wiki-test",
+        repository_id="12345678-1234-5678-1234-567812345678",
+        title="Test Wiki",
+        description="Test",
+        sections=[
+            WikiSection(
+                id="section-1",
+                title="Section 1",
+                description="Test section",
+                order=1,
+                pages=[
+                    WikiPageDetail(
+                        id="page-1",
+                        title="Page 1",
+                        description="First page",
+                        importance=PageImportance.HIGH,
+                        file_paths=["src/main.py"],
+                    ),
+                    WikiPageDetail(
+                        id="page-2",
+                        title="Page 2",
+                        description="Second page",
+                        importance=PageImportance.MEDIUM,
+                        file_paths=["src/utils.py"],
+                    ),
+                ]
+            )
+        ]
+    )
+
+    state = {
+        "repository_id": "12345678-1234-5678-1234-567812345678",
+        "clone_path": "/tmp/test-repo",
+        "file_tree": "src/\n  main.py\n  utils.py",
+        "readme_content": "# Test",
+        "structure": structure,
+        "pages": [],
+        "error": None,
+        "current_step": "structure_extracted",
+    }
+
+    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
+        mock_agent = AsyncMock()
+        # Return different content for each invocation
+        mock_agent.ainvoke.side_effect = [
+            {"messages": [MagicMock(content="# Page 1 Content")]},
+            {"messages": [MagicMock(content="# Page 2 Content")]},
+        ]
+        mock_create.return_value = mock_agent
+
+        result = await generate_pages_node(state)
+
+    # Should create agent once (reused for all pages)
+    mock_create.assert_called_once()
+    # Should invoke agent twice (once per page)
+    assert mock_agent.ainvoke.call_count == 2
+    # Should have 2 pages with content
+    assert len(result.get("pages", [])) == 2
