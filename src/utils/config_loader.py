@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     openai_temperature: float = Field(default=0.1, description="OpenAI temperature")
 
     google_api_key: Optional[str] = Field(default=None, description="Google API key")
-    gemini_model: str = Field(default="gemini-pro", description="Gemini model")
+    gemini_model: str = Field(default="gemini-2.5-flash-lite", description="Gemini model")
     gemini_max_tokens: int = Field(default=4000, description="Gemini max tokens")
     gemini_temperature: float = Field(default=0.1, description="Gemini temperature")
 

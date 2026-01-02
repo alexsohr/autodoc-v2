@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from pymongo import ASCENDING, TEXT, IndexModel
+from pymongo import TEXT, IndexModel
 
 from .base import BaseDocument
 

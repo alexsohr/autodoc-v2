@@ -18,16 +18,20 @@ logger = structlog.get_logger(__name__)
 
 
 class MCPFilesystemClient:
-    """Persistent MCP client for filesystem operations.
+    """MCP client for filesystem operations.
 
     This client manages a connection to the fast-filesystem-mcp server,
     providing methods for file discovery, reading, and search operations.
-    It is designed to be initialized once at application startup and
-    reused across all workflow executions.
+
+    Can be used as:
+    - A singleton for shared usage (via get_instance())
+    - Per-worker instances for concurrent usage (via create_for_worker())
+
+    For concurrent workers (like page generation), use create_for_worker() to
+    give each worker its own stdio connection, avoiding connection contention.
     """
 
     _instance: Optional["MCPFilesystemClient"] = None
-    _initialized: bool = False
 
     def __init__(self, settings: Optional[Settings] = None):
         """Initialize the MCP filesystem client.
@@ -39,6 +43,7 @@ class MCPFilesystemClient:
         self._client: Optional[MultiServerMCPClient] = None
         self._tools: Dict[str, Any] = {}
         self._lock = asyncio.Lock()
+        self._initialized: bool = False
 
     @classmethod
     def get_instance(cls, settings: Optional[Settings] = None) -> "MCPFilesystemClient":
@@ -54,6 +59,50 @@ class MCPFilesystemClient:
             cls._instance = cls(settings)
         return cls._instance
 
+    @classmethod
+    async def create_for_worker(
+        cls,
+        settings: Optional[Settings] = None,
+        worker_id: Optional[str] = None,
+    ) -> Optional["MCPFilesystemClient"]:
+        """Create a new MCP client instance for a worker.
+
+        Unlike get_instance(), this creates a new connection for each call,
+        giving each worker its own stdio connection to the MCP server.
+        This prevents connection contention when multiple workers run concurrently.
+
+        The caller is responsible for calling shutdown() when done.
+
+        Args:
+            settings: Application settings. If None, uses global settings.
+            worker_id: Optional identifier for logging purposes.
+
+        Returns:
+            Initialized client or None if disabled/failed.
+        """
+        settings = settings or get_settings()
+        if not settings.mcp_filesystem_enabled:
+            logger.debug(
+                "MCP filesystem disabled, skipping worker client creation",
+                worker_id=worker_id,
+            )
+            return None
+
+        client = cls(settings)
+        if await client.initialize():
+            logger.info(
+                "Created MCP filesystem client for worker",
+                worker_id=worker_id,
+                num_tools=len(client._tools),
+            )
+            return client
+
+        logger.warning(
+            "Failed to create MCP filesystem client for worker",
+            worker_id=worker_id,
+        )
+        return None
+
     @property
     def is_enabled(self) -> bool:
         """Check if MCP filesystem is enabled in settings."""
@@ -63,6 +112,16 @@ class MCPFilesystemClient:
     def is_initialized(self) -> bool:
         """Check if the client has been initialized."""
         return self._initialized and self._client is not None
+
+    def get_tools(self) -> List[Any]:
+        """Get all available MCP tools.
+
+        Returns:
+            List of tool objects that can be passed to agents.
+        """
+        if not self._initialized:
+            return []
+        return list(self._tools.values())
 
     async def initialize(self) -> bool:
         """Initialize the MCP client connection.
@@ -82,7 +141,7 @@ class MCPFilesystemClient:
             try:
                 # Build args list, automatically including storage path for repo access
                 args = self._settings.mcp_filesystem_args_list.copy()
-                
+
                 # Add the storage base path (where repos are cloned) to allowed directories
                 storage_path = Path(self._settings.storage_base_path).resolve()
                 if storage_path.exists():

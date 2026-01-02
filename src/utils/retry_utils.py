@@ -2,12 +2,14 @@
 
 This module provides retry decorators and utilities using the tenacity library
 for robust error handling and recovery in external service calls.
+
+Also includes LangGraph RetryPolicy factories for agent node retry configuration.
 """
 
 import asyncio
 import logging
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 from tenacity import (
     after_log,
@@ -587,6 +589,125 @@ async def retry_webhook_processing(func: Callable, *args, **kwargs) -> Any:
         base_delay=2.0,
         max_delay=5.0,
         exceptions=[ConnectionError, TimeoutError],
+    )
+
+
+# LangGraph RetryPolicy Factories
+# These create retry policies for use with LangGraph nodes
+
+
+def get_langgraph_retry_policy(
+    initial_interval: float = 1.0,
+    max_interval: float = 10.0,
+    max_attempts: int = 3,
+    retry_on: Optional[Tuple[Type[Exception], ...]] = None,
+) -> Dict[str, Any]:
+    """Create a LangGraph-compatible retry policy configuration.
+
+    LangGraph RetryPolicy is used for configuring retry behavior on graph nodes.
+    This function creates a dictionary that can be passed to RetryPolicy constructor.
+
+    Args:
+        initial_interval: Initial delay between retries in seconds
+        max_interval: Maximum delay between retries in seconds
+        max_attempts: Maximum number of retry attempts
+        retry_on: Tuple of exception types to retry on
+
+    Returns:
+        Dictionary with RetryPolicy configuration
+
+    Example:
+        >>> from langgraph.types import RetryPolicy
+        >>> config = get_langgraph_retry_policy(max_attempts=5)
+        >>> policy = RetryPolicy(**config)
+    """
+    if retry_on is None:
+        retry_on = (ValueError, TimeoutError, ConnectionError, Exception)
+
+    return {
+        "initial_interval": initial_interval,
+        "max_interval": max_interval,
+        "max_attempts": max_attempts,
+        "retry_on": retry_on,
+    }
+
+
+def get_page_worker_retry_policy() -> Dict[str, Any]:
+    """Get retry policy for wiki page generation workers.
+
+    Optimized for LLM-based page generation with:
+    - Moderate initial delay to handle rate limits
+    - Maximum 3 attempts to prevent infinite loops
+    - Retries on common transient errors
+
+    Returns:
+        Dictionary with RetryPolicy configuration for page workers
+
+    Example:
+        >>> from langgraph.types import RetryPolicy
+        >>> config = get_page_worker_retry_policy()
+        >>> policy = RetryPolicy(**config)
+    """
+    return get_langgraph_retry_policy(
+        initial_interval=2.0,
+        max_interval=30.0,
+        max_attempts=3,
+        retry_on=(ValueError, TimeoutError, ConnectionError, OSError, Exception),
+    )
+
+
+def get_llm_node_retry_policy() -> Dict[str, Any]:
+    """Get retry policy for LLM interaction nodes.
+
+    Optimized for LLM API calls with:
+    - Longer initial delay for rate limit recovery
+    - Fewer attempts to avoid excessive API costs
+    - Focus on transient network errors
+
+    Returns:
+        Dictionary with RetryPolicy configuration for LLM nodes
+    """
+    return get_langgraph_retry_policy(
+        initial_interval=5.0,
+        max_interval=60.0,
+        max_attempts=3,
+        retry_on=(TimeoutError, ConnectionError, OSError),
+    )
+
+
+def get_database_node_retry_policy() -> Dict[str, Any]:
+    """Get retry policy for database operation nodes.
+
+    Optimized for MongoDB operations with:
+    - Short initial delay for quick recovery
+    - More attempts for transient connection issues
+
+    Returns:
+        Dictionary with RetryPolicy configuration for database nodes
+    """
+    return get_langgraph_retry_policy(
+        initial_interval=1.0,
+        max_interval=10.0,
+        max_attempts=5,
+        retry_on=(ConnectionError, TimeoutError),
+    )
+
+
+def get_file_operation_retry_policy() -> Dict[str, Any]:
+    """Get retry policy for file system operation nodes.
+
+    Optimized for file I/O with:
+    - Short delays for file locking issues
+    - Fewer attempts as file errors are often persistent
+
+    Returns:
+        Dictionary with RetryPolicy configuration for file operations
+    """
+    return get_langgraph_retry_policy(
+        initial_interval=0.5,
+        max_interval=5.0,
+        max_attempts=3,
+        retry_on=(OSError, IOError, PermissionError),
     )
 
 
