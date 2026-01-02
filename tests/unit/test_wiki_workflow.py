@@ -401,57 +401,61 @@ async def test_generate_pages_node_agent_error():
 
 
 @pytest.mark.asyncio
-async def test_finalize_node_combines_pages():
-    """finalize_node should combine pages into structure and store."""
-    from unittest.mock import AsyncMock, patch, MagicMock
-    from src.agents.wiki_workflow import finalize_node, WikiWorkflowState
+async def test_finalize_node_saves_aggregated_structure():
+    """Finalize node should save the structure that already has content from aggregate step."""
+    from src.agents.wiki_workflow import finalize_node
     from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+    from src.repository.wiki_structure_repository import WikiStructureRepository
+    from unittest.mock import patch, AsyncMock
+    from uuid import UUID
 
+    # Structure with content already merged (from aggregate step)
     structure = WikiStructure(
-        id="test-wiki",
-        repository_id="00000000-0000-0000-0000-000000000000",
+        id="wiki-test",
+        repository_id="12345678-1234-5678-1234-567812345678",
         title="Test Wiki",
-        description="Test description",
+        description="Test",
         sections=[
             WikiSection(
-                id="section1",
+                id="section-1",
                 title="Section 1",
+                description="Test",
+                order=1,
                 pages=[
-                    WikiPageDetail(id="page1", title="Page 1", description="First", importance=PageImportance.HIGH),
-                    WikiPageDetail(id="page2", title="Page 2", description="Second", importance=PageImportance.MEDIUM),
+                    WikiPageDetail(
+                        id="page-1",
+                        title="Page 1",
+                        description="First",
+                        importance=PageImportance.HIGH,
+                        file_paths=[],
+                        content="# Page 1 Content",  # Already merged by aggregate
+                    ),
                 ]
             )
         ]
     )
 
-    pages_with_content = [
-        WikiPageDetail(id="page1", title="Page 1", description="First", importance=PageImportance.HIGH, content="# Page 1 Content"),
-        WikiPageDetail(id="page2", title="Page 2", description="Second", importance=PageImportance.MEDIUM, content="# Page 2 Content"),
-    ]
+    state = {
+        "repository_id": "12345678-1234-5678-1234-567812345678",
+        "clone_path": "/tmp/test",
+        "file_tree": "",
+        "readme_content": "",
+        "structure": structure,
+        "pages": [],  # Empty - content already in structure
+        "error": None,
+        "current_step": "aggregated",
+    }
 
-    state = WikiWorkflowState(
-        repository_id="00000000-0000-0000-0000-000000000000",
-        clone_path="/tmp/repo",
-        file_tree="src/",
-        readme_content="# Test",
-        structure=structure,
-        pages=pages_with_content,
-        error=None,
-        current_step="pages_generated",
-    )
-
-    with patch("src.agents.wiki_workflow.WikiStructureRepository") as MockWikiRepo:
-        # Mock repository upsert
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.upsert = AsyncMock()
-        MockWikiRepo.return_value = mock_repo_instance
-
+    with patch.object(WikiStructureRepository, "upsert", new_callable=AsyncMock) as mock_upsert:
         result = await finalize_node(state)
 
-        assert result["current_step"] == "completed"
-        assert result.get("error") is None
-        # Verify repository was called
-        mock_repo_instance.upsert.assert_called_once()
+    mock_upsert.assert_called_once()
+    # Verify the structure passed to upsert has the content
+    call_kwargs = mock_upsert.call_args.kwargs
+    saved_wiki = call_kwargs.get("wiki")
+    assert saved_wiki is not None
+    assert saved_wiki.sections[0].pages[0].content == "# Page 1 Content"
+    assert result.get("current_step") == "completed"
 
 
 @pytest.mark.asyncio
@@ -500,10 +504,12 @@ async def test_finalize_node_no_structure():
 @pytest.mark.asyncio
 async def test_finalize_node_save_failure():
     """finalize_node should handle database save failures gracefully."""
-    from unittest.mock import AsyncMock, patch, MagicMock
-    from src.agents.wiki_workflow import finalize_node, WikiWorkflowState
+    from unittest.mock import AsyncMock, patch
+    from src.agents.wiki_workflow import finalize_node
     from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+    from src.repository.wiki_structure_repository import WikiStructureRepository
 
+    # Structure with content already merged (from aggregate step)
     structure = WikiStructure(
         id="test-wiki",
         repository_id="00000000-0000-0000-0000-000000000000",
@@ -514,33 +520,35 @@ async def test_finalize_node_save_failure():
                 id="section1",
                 title="Section 1",
                 pages=[
-                    WikiPageDetail(id="page1", title="Page 1", description="First", importance=PageImportance.HIGH),
+                    WikiPageDetail(
+                        id="page1",
+                        title="Page 1",
+                        description="First",
+                        importance=PageImportance.HIGH,
+                        content="# Page 1 Content",  # Already merged
+                    ),
                 ]
             )
         ]
     )
 
-    pages_with_content = [
-        WikiPageDetail(id="page1", title="Page 1", description="First", importance=PageImportance.HIGH, content="# Page 1 Content"),
-    ]
+    state = {
+        "repository_id": "00000000-0000-0000-0000-000000000000",
+        "clone_path": "/tmp/repo",
+        "file_tree": "src/",
+        "readme_content": "# Test",
+        "structure": structure,
+        "pages": [],  # Empty - content already in structure
+        "error": None,
+        "current_step": "aggregated",
+    }
 
-    state = WikiWorkflowState(
-        repository_id="00000000-0000-0000-0000-000000000000",
-        clone_path="/tmp/repo",
-        file_tree="src/",
-        readme_content="# Test",
-        structure=structure,
-        pages=pages_with_content,
-        error=None,
-        current_step="pages_generated",
-    )
-
-    with patch("src.agents.wiki_workflow.WikiStructureRepository") as MockWikiRepo:
-        # Mock repository upsert failure
-        mock_repo_instance = MagicMock()
-        mock_repo_instance.upsert = AsyncMock(side_effect=Exception("Database connection failed"))
-        MockWikiRepo.return_value = mock_repo_instance
-
+    with patch.object(
+        WikiStructureRepository,
+        "upsert",
+        new_callable=AsyncMock,
+        side_effect=Exception("Database connection failed")
+    ) as mock_upsert:
         result = await finalize_node(state)
 
         assert result["current_step"] == "error"

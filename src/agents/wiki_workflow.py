@@ -440,13 +440,13 @@ async def aggregate_node(state: WikiWorkflowState) -> Dict[str, Any]:
 
 
 async def finalize_node(state: WikiWorkflowState) -> Dict[str, Any]:
-    """Finalize wiki by combining pages and storing to database.
+    """Finalize wiki by saving to database.
 
-    This is the fan-in step. It takes all generated pages, updates
-    the structure with content, and persists to MongoDB.
+    The structure should already have content merged from the aggregate step.
+    This node simply persists the final wiki to MongoDB.
 
     Args:
-        state: State with structure and generated pages
+        state: State with aggregated structure (content already merged)
 
     Returns:
         Dict with updated current_step
@@ -455,7 +455,6 @@ async def finalize_node(state: WikiWorkflowState) -> Dict[str, Any]:
         return {"current_step": "error"}
 
     structure = state.get("structure")
-    pages = state.get("pages", [])
 
     if not structure:
         return {
@@ -463,39 +462,13 @@ async def finalize_node(state: WikiWorkflowState) -> Dict[str, Any]:
             "current_step": "error",
         }
 
-    # Create page lookup by ID
-    page_content_map = {p.id: p.content for p in pages if p.content}
-
-    # Update structure sections with generated content
-    updated_sections = []
-    for section in structure.sections:
-        updated_pages = []
-        for page in section.pages:
-            content = page_content_map.get(page.id)
-            if content:
-                updated_page = page.model_copy(update={"content": content})
-            else:
-                updated_page = page
-            updated_pages.append(updated_page)
-
-        updated_section = section.model_copy(update={"pages": updated_pages})
-        updated_sections.append(updated_section)
-
-    # Create final wiki structure
-    final_wiki = WikiStructure(
-        id=structure.id,
-        repository_id=state["repository_id"],
-        title=structure.title,
-        description=structure.description,
-        sections=updated_sections,
-    )
-
-    # Store to database using repository layer
+    # The structure already has content merged by aggregate_node
+    # Just save it directly
     try:
         wiki_repo = WikiStructureRepository(WikiStructure)
         await wiki_repo.upsert(
             repository_id=UUID(state["repository_id"]),
-            wiki=final_wiki
+            wiki=structure
         )
     except Exception as e:
         return {
