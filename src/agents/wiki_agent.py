@@ -1,8 +1,8 @@
 """Wiki generation agent for LangGraph workflows
 
 This module implements the wiki generation agent that creates comprehensive
-documentation wikis from analyzed repositories. It uses the deep structure agent
-with subagents for page generation.
+documentation wikis from analyzed repositories. It orchestrates the wiki_workflow
+which uses React agents for structure extraction and page generation.
 """
 
 from datetime import datetime, timezone
@@ -13,14 +13,10 @@ import structlog
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 
-from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
-from ..repository.code_document_repository import CodeDocumentRepository
 from .wiki_workflow import wiki_workflow, WikiWorkflowState
 from ..repository.repository_repository import RepositoryRepository
 from ..repository.wiki_structure_repository import WikiStructureRepository
-from ..tools.context_tool import ContextTool
-from ..tools.llm_tool import LLMTool
 
 logger = structlog.get_logger(__name__)
 
@@ -28,8 +24,7 @@ logger = structlog.get_logger(__name__)
 class WikiGenerationState(TypedDict):
     """State for wiki generation workflow.
 
-    Simplified state that relies on the deep structure agent with subagents
-    for page generation, eliminating complex batch processing.
+    Tracks the progress and data through the wiki generation pipeline.
     """
 
     repository_id: str
@@ -47,43 +42,34 @@ class WikiGenerationState(TypedDict):
 class WikiGenerationAgent:
     """LangGraph agent for wiki generation workflows.
 
-    Orchestrates the complete wiki generation pipeline using the deep structure agent
-    that generates both structure and page content via subagent delegation.
+    Orchestrates the complete wiki generation pipeline using the wiki_workflow
+    which leverages React agents for structure extraction and page generation.
     """
 
     def __init__(
         self,
-        context_tool: ContextTool,
-        llm_tool: LLMTool,
         wiki_structure_repo: WikiStructureRepository,
         repository_repo: RepositoryRepository,
-        code_document_repo: CodeDocumentRepository,
     ):
         """Initialize wiki generation agent with dependency injection.
 
         Args:
-            context_tool: ContextTool instance (injected via DI).
-            llm_tool: LLMTool instance (injected via DI).
             wiki_structure_repo: WikiStructureRepository instance (injected via DI).
             repository_repo: RepositoryRepository instance (injected via DI).
-            code_document_repo: CodeDocumentRepository instance (injected via DI).
         """
-        self._context_tool = context_tool
-        self._llm_tool = llm_tool
         self._wiki_structure_repo = wiki_structure_repo
         self._repository_repo = repository_repo
-        self._code_document_repo = code_document_repo
 
         self.workflow = self._create_workflow()
 
     def _create_workflow(self) -> StateGraph:
-        """Create the simplified wiki generation workflow.
+        """Create the wiki generation workflow.
 
         Workflow:
             START -> analyze_repository -> generate_wiki -> store_wiki -> END
 
-        The generate_wiki node uses the deep structure agent with subagents
-        for page generation, eliminating the need for complex batch processing.
+        The generate_wiki node invokes the wiki_workflow which uses React agents
+        for structure extraction and sequential page generation.
 
         Returns:
             Compiled LangGraph StateGraph
@@ -109,7 +95,7 @@ class WikiGenerationAgent:
         app = workflow.compile().with_config(
             {"run_name": "wiki_agent.wiki_generation_workflow"}
         )
-        logger.debug("Wiki generation workflow (deep structure agent) created")
+        logger.debug("Wiki generation workflow created")
         return app
 
     async def generate_wiki(

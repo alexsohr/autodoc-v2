@@ -203,22 +203,16 @@ def get_llm_tool() -> LLMTool:
 
 
 def get_wiki_agent(
-    context_tool: Annotated[ContextTool, Depends(get_context_tool)],
-    llm_tool: Annotated[LLMTool, Depends(get_llm_tool)],
     wiki_structure_repo: Annotated[WikiStructureRepository, Depends(get_wiki_structure_repo)],
     repository_repo: Annotated[RepositoryRepository, Depends(get_repository_repo)],
-    code_document_repo: Annotated[CodeDocumentRepository, Depends(get_code_document_repo)]
 ) -> WikiGenerationAgent:
     """Get WikiGenerationAgent instance with injected dependencies.
-    
+
     FastAPI will cache this per request automatically.
     """
     return WikiGenerationAgent(
-        context_tool=context_tool,
-        llm_tool=llm_tool,
         wiki_structure_repo=wiki_structure_repo,
         repository_repo=repository_repo,
-        code_document_repo=code_document_repo
     )
 
 
