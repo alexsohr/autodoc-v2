@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 
 from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
 from src.tools.llm_tool import LLMTool
-from src.utils.config_loader import get_settings
 
 
 def _load_prompts() -> dict:
@@ -166,11 +165,28 @@ async def extract_structure_node(state: WikiWorkflowState) -> Dict[str, Any]:
     Returns:
         Dict with 'structure' and updated 'current_step'
     """
-    settings = get_settings()
     llm_tool = LLMTool()
 
-    # Build prompt from template
-    system_prompt = PROMPTS["structure_agent"]["system_prompt"]
+    # Extract owner/repo from clone_path if possible
+    # clone_path typically looks like: /path/to/repos/owner/repo or similar
+    clone_path = state.get("clone_path", "")
+    path_parts = Path(clone_path).parts if clone_path else []
+    # Try to get last two parts as owner/repo, fallback to empty strings
+    owner = path_parts[-2] if len(path_parts) >= 2 else ""
+    repo = path_parts[-1] if len(path_parts) >= 1 else ""
+
+    # Build prompt from template with variable substitution
+    system_prompt_template = PROMPTS["structure_agent"]["system_prompt"]
+    # The exploration_instructions is not needed for structured output extraction,
+    # since we provide the file_tree and readme in the user prompt
+    system_prompt = system_prompt_template.format(
+        owner=owner,
+        repo=repo,
+        file_tree=state.get("file_tree", ""),
+        readme_content=state.get("readme_content", ""),
+        clone_path=clone_path,
+        exploration_instructions="",  # Not needed for structure extraction
+    )
     user_prompt = f"""Analyze this repository and create a wiki structure.
 
 ## File Tree
