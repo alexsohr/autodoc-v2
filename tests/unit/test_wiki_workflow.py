@@ -134,10 +134,10 @@ def test_wiki_workflow_state_current_step_tracking():
 
 @pytest.mark.asyncio
 async def test_extract_structure_node_success():
-    """extract_structure_node should return structure from LLM."""
+    """extract_structure_node should return structure from React agent."""
     from unittest.mock import AsyncMock, patch
-    from src.agents.wiki_workflow import extract_structure_node, LLMWikiStructureSchema
-    from src.models.wiki import WikiSection, PageImportance
+    from src.agents.wiki_workflow import extract_structure_node
+    from src.models.wiki import PageImportance
 
     # Use a valid UUID for repository_id
     test_repo_id = "00000000-0000-0000-0000-000000000000"
@@ -153,8 +153,8 @@ async def test_extract_structure_node_success():
         current_step="init",
     )
 
-    # Mock the LLM output using the LLMWikiStructureSchema format
-    mock_llm_output = {
+    # Mock the React agent structured_response output
+    mock_structured_response = {
         "title": "Test Project",
         "description": "A test project",
         "sections": [
@@ -174,13 +174,13 @@ async def test_extract_structure_node_success():
         ]
     }
 
-    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
-        mock_llm = AsyncMock()
-        mock_llm.generate_structured.return_value = {
-            "status": "success",
-            "structured_output": mock_llm_output
+    with patch("src.agents.wiki_workflow.create_structure_agent") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke.return_value = {
+            "messages": [],
+            "structured_response": mock_structured_response
         }
-        MockLLMTool.return_value = mock_llm
+        mock_create.return_value = mock_agent
 
         result = await extract_structure_node(initial_state)
 
@@ -196,7 +196,7 @@ async def test_extract_structure_node_success():
 
 @pytest.mark.asyncio
 async def test_extract_structure_node_error():
-    """extract_structure_node should handle LLM errors gracefully."""
+    """extract_structure_node should handle agent errors gracefully."""
     from unittest.mock import AsyncMock, patch
     from src.agents.wiki_workflow import extract_structure_node
 
@@ -214,13 +214,11 @@ async def test_extract_structure_node_error():
         current_step="init",
     )
 
-    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
-        mock_llm = AsyncMock()
-        mock_llm.generate_structured.return_value = {
-            "status": "error",
-            "error": "Rate limit exceeded"
-        }
-        MockLLMTool.return_value = mock_llm
+    with patch("src.agents.wiki_workflow.create_structure_agent") as mock_create:
+        mock_agent = AsyncMock()
+        # Simulate agent raising an exception
+        mock_agent.ainvoke.side_effect = Exception("Rate limit exceeded")
+        mock_create.return_value = mock_agent
 
         result = await extract_structure_node(initial_state)
 
@@ -568,3 +566,83 @@ def test_wiki_workflow_compiles():
     assert "extract_structure" in str(workflow.nodes)
     assert "generate_pages" in str(workflow.nodes)
     assert "finalize" in str(workflow.nodes)
+
+
+# =============================================================================
+# Tests for React Agent Integration
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_extract_structure_node_uses_react_agent():
+    """Structure node should invoke React agent with MCP tools."""
+    from src.agents.wiki_workflow import extract_structure_node
+    from unittest.mock import patch, AsyncMock
+
+    # Use a valid UUID for repository_id
+    test_repo_id = "00000000-0000-0000-0000-000000000001"
+
+    state = {
+        "repository_id": test_repo_id,
+        "clone_path": "/tmp/test-repo",
+        "file_tree": "src/\n  main.py",
+        "readme_content": "# Test Repo",
+        "structure": None,
+        "pages": [],
+        "error": None,
+        "current_step": "init",
+    }
+
+    with patch("src.agents.wiki_workflow.create_structure_agent") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke.return_value = {
+            "messages": [],
+            "structured_response": {
+                "title": "Test Wiki",
+                "description": "Test",
+                "sections": []
+            }
+        }
+        mock_create.return_value = mock_agent
+
+        result = await extract_structure_node(state)
+
+    mock_create.assert_called_once()
+    mock_agent.ainvoke.assert_called_once()
+    assert result.get("structure") is not None
+
+
+@pytest.mark.asyncio
+async def test_extract_structure_node_no_structured_output():
+    """Structure node should handle missing structured_response gracefully."""
+    from src.agents.wiki_workflow import extract_structure_node
+    from unittest.mock import patch, AsyncMock
+
+    # Use a valid UUID for repository_id
+    test_repo_id = "00000000-0000-0000-0000-000000000002"
+
+    state = {
+        "repository_id": test_repo_id,
+        "clone_path": "/tmp/test-repo",
+        "file_tree": "src/\n  main.py",
+        "readme_content": "# Test Repo",
+        "structure": None,
+        "pages": [],
+        "error": None,
+        "current_step": "init",
+    }
+
+    with patch("src.agents.wiki_workflow.create_structure_agent") as mock_create:
+        mock_agent = AsyncMock()
+        # Agent returns messages but no structured_response
+        mock_agent.ainvoke.return_value = {
+            "messages": [{"role": "assistant", "content": "I analyzed the repo..."}],
+            "structured_response": None
+        }
+        mock_create.return_value = mock_agent
+
+        result = await extract_structure_node(state)
+
+    assert result.get("error") is not None
+    assert "did not return structured output" in result["error"]
+    assert result["current_step"] == "error"

@@ -14,12 +14,16 @@ from pathlib import Path
 from typing import Annotated, Optional, List, TypedDict, Dict, Any
 from uuid import uuid4, UUID
 
+import structlog
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
 
 from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
 from src.repository.wiki_structure_repository import WikiStructureRepository
 from src.tools.llm_tool import LLMTool
+from src.agents.wiki_react_agents import create_structure_agent
+
+logger = structlog.get_logger(__name__)
 
 
 def _load_prompts() -> dict:
@@ -156,10 +160,10 @@ def _convert_llm_structure_to_wiki_structure(
 
 
 async def extract_structure_node(state: WikiWorkflowState) -> Dict[str, Any]:
-    """Extract wiki structure from repository analysis.
+    """Extract wiki structure using React agent with MCP tools.
 
-    Uses LLM with structured output to generate a WikiStructure
-    based on the repository's file tree and README content.
+    The React agent can explore the codebase using filesystem tools
+    and returns a structured WikiStructure.
 
     Args:
         state: Current workflow state with file_tree and readme_content
@@ -167,85 +171,84 @@ async def extract_structure_node(state: WikiWorkflowState) -> Dict[str, Any]:
     Returns:
         Dict with 'structure' and updated 'current_step'
     """
-    llm_tool = LLMTool()
-
-    # Extract owner/repo from clone_path if possible
-    # clone_path typically looks like: /path/to/repos/owner/repo or similar
     clone_path = state.get("clone_path", "")
-    path_parts = Path(clone_path).parts if clone_path else []
-    # Try to get last two parts as owner/repo, fallback to empty strings
-    owner = path_parts[-2] if len(path_parts) >= 2 else ""
-    repo = path_parts[-1] if len(path_parts) >= 1 else ""
+    file_tree = state.get("file_tree", "")
+    readme_content = state.get("readme_content", "")
 
-    # Build prompt from template with variable substitution
-    system_prompt_template = PROMPTS["structure_agent"]["system_prompt"]
-    # The exploration_instructions is not needed for structured output extraction,
-    # since we provide the file_tree and readme in the user prompt
-    system_prompt = system_prompt_template.format(
-        owner=owner,
-        repo=repo,
-        file_tree=state.get("file_tree", ""),
-        readme_content=state.get("readme_content", ""),
+    # Create React agent with MCP tools
+    agent = await create_structure_agent(
         clone_path=clone_path,
-        exploration_instructions="",  # Not needed for structure extraction
+        file_tree=file_tree,
+        readme_content=readme_content,
     )
-    user_prompt = f"""Analyze this repository and create a wiki structure.
+
+    # Build user message for the agent
+    user_message = f"""Analyze this repository and create a comprehensive wiki structure.
+
+## Repository Context
+- Clone Path: {clone_path}
 
 ## File Tree
 ```
-{state["file_tree"]}
+{file_tree}
 ```
 
-## README Content
+## README
 ```
-{state["readme_content"]}
+{readme_content}
 ```
 
-Create a comprehensive wiki structure with sections and pages.
-Design a wiki with 8-12 pages covering:
+Explore the codebase using the filesystem tools to understand:
+1. Project architecture and structure
+2. Key modules and their purposes
+3. Important files and their relationships
+
+Then design a wiki with 8-12 pages covering:
 - Overview and Getting Started
 - Architecture and core concepts
 - Key features and functionality
 - API reference (if applicable)
 - Development and deployment guides
 
-For each page, provide:
-- id: URL-friendly identifier (lowercase, hyphens only)
-- title: Descriptive page title
-- description: What this page covers
-- importance: 'high', 'medium', or 'low'
-- file_paths: List of relevant source files"""
+Use the filesystem tools to examine actual source files before finalizing the structure.
+"""
 
-    result = await llm_tool.generate_structured(
-        prompt=user_prompt,
-        schema=LLMWikiStructureSchema,
-        system_message=system_prompt,
-    )
+    try:
+        result = await agent.ainvoke({
+            "messages": [{"role": "user", "content": user_message}]
+        })
 
-    if result["status"] == "error":
+        # Extract structured response
+        structured_output = result.get("structured_response")
+        if not structured_output:
+            return {
+                "error": "Agent did not return structured output",
+                "current_step": "error",
+            }
+
+        # Convert to WikiStructure
+        if isinstance(structured_output, dict):
+            structure = _convert_llm_structure_to_wiki_structure(
+                structured_output,
+                state["repository_id"],
+            )
+        else:
+            structure = _convert_llm_structure_to_wiki_structure(
+                structured_output.model_dump(),
+                state["repository_id"],
+            )
+
         return {
-            "error": f"Structure extraction failed: {result.get('error', 'Unknown error')}",
-            "current_step": "error",
+            "structure": structure,
+            "current_step": "structure_extracted",
         }
 
-    # Parse structured output back to WikiStructure
-    structure_data = result["structured_output"]
-    if isinstance(structure_data, dict):
-        structure = _convert_llm_structure_to_wiki_structure(
-            structure_data,
-            state["repository_id"],
-        )
-    else:
-        # If it's already a Pydantic model, convert to dict first
-        structure = _convert_llm_structure_to_wiki_structure(
-            structure_data.model_dump() if hasattr(structure_data, "model_dump") else structure_data,
-            state["repository_id"],
-        )
-
-    return {
-        "structure": structure,
-        "current_step": "structure_extracted",
-    }
+    except Exception as e:
+        logger.error("Structure extraction failed", error=str(e))
+        return {
+            "error": f"Structure extraction failed: {str(e)}",
+            "current_step": "error",
+        }
 
 
 async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
@@ -276,9 +279,12 @@ async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
     structure = state["structure"]
     clone_path = state["clone_path"]
     file_tree = state["file_tree"]
+    readme_content = state.get("readme_content", "")
 
     llm_tool = LLMTool()
-    system_prompt = PROMPTS["page_generation_full"]["system_prompt"]
+    # Use simple prompt that doesn't expect tool calls
+    # (page_generation_full expects MCP filesystem tools which aren't bound here)
+    system_prompt = PROMPTS["page_generation_simple"]["system_prompt"]
 
     generated_pages = []
     all_pages = structure.get_all_pages()
@@ -296,13 +302,23 @@ async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
                     except Exception:
                         pass
 
+        # Build context-rich user prompt
+        readme_section = ""
+        if readme_content:
+            # Truncate readme if too long
+            truncated_readme = readme_content[:3000] if len(readme_content) > 3000 else readme_content
+            readme_section = f"""
+## Repository README
+{truncated_readme}
+"""
+
         user_prompt = f"""Generate comprehensive documentation for this wiki page.
 
 ## Page Details
 - Title: {page.title}
 - Description: {page.description}
 - Importance: {page.importance.value if hasattr(page.importance, 'value') else page.importance}
-
+{readme_section}
 ## Repository File Tree
 ```
 {file_tree}
@@ -311,7 +327,7 @@ async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
 ## Relevant Source Files
 {file_contents if file_contents else "No specific files referenced."}
 
-Generate the markdown content for this page."""
+Generate the markdown content for this page. Start with `# {page.title}` as the main heading."""
 
         # IMPORTANT: Use generate_text, not generate
         result = await llm_tool.generate_text(
