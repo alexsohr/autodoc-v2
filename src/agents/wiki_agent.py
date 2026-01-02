@@ -1,28 +1,22 @@
 """Wiki generation agent for LangGraph workflows
 
 This module implements the wiki generation agent that creates comprehensive
-documentation wikis from analyzed repositories using the prompts from
-wiki-generation-prompts.md.
+documentation wikis from analyzed repositories. It uses the deep structure agent
+with subagents for page generation.
 """
 
-import asyncio
-import json
-import operator
-import os
-import re
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
 import structlog
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
 
 from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
 from ..repository.code_document_repository import CodeDocumentRepository
+from .wiki_workflow import wiki_workflow, WikiWorkflowState
 from ..repository.repository_repository import RepositoryRepository
 from ..repository.wiki_structure_repository import WikiStructureRepository
 from ..tools.context_tool import ContextTool
@@ -32,15 +26,16 @@ logger = structlog.get_logger(__name__)
 
 
 class WikiGenerationState(TypedDict):
-    """State for wiki generation workflow"""
+    """State for wiki generation workflow.
+
+    Simplified state that relies on the deep structure agent with subagents
+    for page generation, eliminating complex batch processing.
+    """
 
     repository_id: str
     file_tree: str
     readme_content: str
-    wiki_structure: Optional[Dict[str, Any]]
-    # CRITICAL: Use Annotated with operator.add for parallel worker result aggregation
-    generated_pages: Annotated[List[Dict[str, Any]], operator.add]
-    current_page: Optional[str]
+    wiki_structure: Optional[Dict[str, Any]]  # Complete wiki with page contents
     current_step: str
     error_message: Optional[str]
     progress: float
@@ -49,209 +44,23 @@ class WikiGenerationState(TypedDict):
     clone_path: Optional[str]  # Path to cloned repository for file access
 
 
-class PageWorkerState(TypedDict):
-    """State for individual page generation worker.
-
-    CRITICAL: This state MUST include `generated_pages` with the SAME
-    Annotated reducer as WikiGenerationState. This is required for
-    LangGraph to properly aggregate results from parallel workers.
-
-    The worker receives this state via Send() and writes its result
-    to generated_pages, which gets merged into the main state.
-    """
-
-    page_info: Dict[str, Any]  # Page definition from wiki_structure
-    clone_path: Optional[str]  # For reading files from disk
-    repo_name: str  # Repository name for context
-    repo_description: str  # Repository description for context
-    # MUST match WikiGenerationState for aggregation!
-    generated_pages: Annotated[List[Dict[str, Any]], operator.add]
-
-
-def fan_out_to_page_workers(state: WikiGenerationState) -> list[Send]:
-    """Create parallel page generation tasks using LangGraph Send.
-
-    Each Send creates a separate page_worker execution with its own state.
-    The worker state includes `generated_pages` with the same reducer as
-    the main state, allowing LangGraph to aggregate results automatically.
-
-    Args:
-        state: Current workflow state with wiki_structure and clone_path
-
-    Returns:
-        List of Send objects, one per page to generate
-    """
-    if not state.get("wiki_structure"):
-        logger.warning("No wiki_structure found, cannot fan out to page workers")
-        return []
-
-    pages = state["wiki_structure"].get("pages", [])
-    if not pages:
-        logger.warning("No pages in wiki_structure")
-        return []
-
-    clone_path = state.get("clone_path")
-    if not clone_path:
-        logger.error("clone_path not set in state, cannot read files for page generation")
-        return []
-
-    # Extract repository context for page agents
-    wiki_structure = state["wiki_structure"]
-    repo_name = wiki_structure.get("title", state.get("repository_id", "unknown"))
-    repo_description = wiki_structure.get("description", "")
-
-    sends = []
-    for page in pages:
-        # Each Send payload becomes the worker's input state
-        # CRITICAL: Must include generated_pages for aggregation to work
-        sends.append(
-            Send("page_worker", {
-                "page_info": page,
-                "clone_path": clone_path,
-                "repo_name": repo_name,
-                "repo_description": repo_description,
-                "generated_pages": [],  # Will be populated by worker, then aggregated
-            })
-        )
-
-    logger.info("Fanning out to parallel page workers", num_pages=len(sends))
-    return sends
-
-
-async def page_worker_node(state: PageWorkerState) -> Dict[str, Any]:
-    """Generate content for a single wiki page using deep agent exploration.
-
-    This node runs in parallel for each page via LangGraph's Send API.
-    It uses a deep agent with MCP filesystem tools to explore and document.
-
-    IMPORTANT: Returns {"generated_pages": [page_result]} which gets
-    aggregated with other workers via the operator.add reducer.
-
-    Args:
-        state: PageWorkerState with page_info, clone_path, and repository context
-
-    Returns:
-        Dict with 'generated_pages' list containing the page with generated content
-    """
-    from .deep_page_agent import run_page_agent
-    from ..utils.config_loader import get_settings
-
-    page_info = state["page_info"]
-    clone_path = state.get("clone_path")
-
-    # Get repository context from state
-    repo_name = state.get("repo_name", "unknown")
-    repo_description = state.get("repo_description", "")
-
-    # Validate page_info has required fields
-    required_keys = ["title", "section", "description", "slug"]
-    missing_keys = [k for k in required_keys if k not in page_info]
-    if missing_keys:
-        logger.warning(
-            "page_info missing required fields",
-            page_title=page_info.get("title", "UNKNOWN"),
-            missing_keys=missing_keys,
-        )
-        return {"generated_pages": []}
-
-    if not clone_path:
-        logger.error("No clone_path provided for page worker", page_title=page_info["title"])
-        return {"generated_pages": []}
-
-    logger.info(
-        "Page worker starting with deep agent",
-        page_title=page_info["title"],
-        num_file_hints=len(page_info.get("file_paths", [])),
-    )
-
-    try:
-        settings = get_settings()
-
-        # Run deep page agent
-        result = await run_page_agent(
-            clone_path=clone_path,
-            page_title=page_info["title"],
-            page_description=page_info.get("description", ""),
-            file_hints=page_info.get("file_paths", []),
-            repo_name=repo_name,
-            repo_description=repo_description,
-            timeout=120.0,  # 2 minutes per page
-            model=settings.openai_model,
-        )
-
-        if result and result.get("content"):
-            page_result = {
-                "title": page_info["title"],
-                "slug": page_info["slug"],
-                "section": page_info["section"],
-                "description": page_info["description"],
-                "file_paths": result.get("source_files", page_info.get("file_paths", [])),
-                "content": result["content"],
-            }
-
-            logger.info(
-                "Deep agent generated content for page",
-                page_title=page_info["title"],
-                content_chars=len(result["content"]),
-                source_files=len(result.get("source_files", [])),
-            )
-
-            return {"generated_pages": [page_result]}
-        else:
-            logger.warning(
-                "Deep agent returned no content for page",
-                page_title=page_info["title"],
-            )
-            return {"generated_pages": []}
-
-    except Exception as e:
-        logger.error(
-            "Failed to generate page with deep agent",
-            page_title=page_info["title"],
-            error=str(e),
-        )
-        return {"generated_pages": []}
-
-
-async def aggregate_pages_node(state: WikiGenerationState) -> Dict[str, Any]:
-    """Aggregate results from all parallel page workers.
-
-    NOTE: LangGraph automatically aggregates generated_pages from all workers
-    via the operator.add reducer BEFORE this node runs. This node receives
-    the already-merged results.
-
-    This node:
-    1. Logs the aggregation results
-    2. Updates progress and step status
-    3. Prepares state for the store_wiki node
-
-    Args:
-        state: WikiGenerationState with aggregated generated_pages
-
-    Returns:
-        Updated state dict with progress and step updates
-    """
-    generated_pages = state.get("generated_pages", [])
-
-    logger.info("Aggregated pages from parallel workers", num_pages=len(generated_pages))
-
-    return {
-        "current_step": "pages_generated",
-        "progress": 90.0,
-    }
-
-
 class WikiGenerationAgent:
-    """LangGraph agent for wiki generation workflows
+    """LangGraph agent for wiki generation workflows.
 
-    Orchestrates the complete wiki generation pipeline from repository
-    analysis to structured documentation creation with Mermaid diagrams.
+    Orchestrates the complete wiki generation pipeline using the deep structure agent
+    that generates both structure and page content via subagent delegation.
     """
 
-    def __init__(self, context_tool: ContextTool, llm_tool: LLMTool,
-                 wiki_structure_repo: WikiStructureRepository, repository_repo: RepositoryRepository, code_document_repo: CodeDocumentRepository):
+    def __init__(
+        self,
+        context_tool: ContextTool,
+        llm_tool: LLMTool,
+        wiki_structure_repo: WikiStructureRepository,
+        repository_repo: RepositoryRepository,
+        code_document_repo: CodeDocumentRepository,
+    ):
         """Initialize wiki generation agent with dependency injection.
-        
+
         Args:
             context_tool: ContextTool instance (injected via DI).
             llm_tool: LLMTool instance (injected via DI).
@@ -264,24 +73,17 @@ class WikiGenerationAgent:
         self._wiki_structure_repo = wiki_structure_repo
         self._repository_repo = repository_repo
         self._code_document_repo = code_document_repo
-        
+
         self.workflow = self._create_workflow()
 
-        # Load prompts from wiki-generation-prompts.md
-        self.structure_prompt_template = self._load_structure_prompt()
-        self.page_prompt_template = self._load_page_prompt()
-
     def _create_workflow(self) -> StateGraph:
-        """Create the wiki generation workflow graph with parallel page generation.
+        """Create the simplified wiki generation workflow.
 
         Workflow:
-            START -> analyze_repository -> generate_structure
-                  -> [parallel page_workers via Send] -> aggregate_pages
-                  -> store_wiki -> END
+            START -> analyze_repository -> generate_wiki -> store_wiki -> END
 
-        The Send API creates parallel page_worker executions, each processing
-        one page. Results are automatically aggregated via the operator.add
-        reducer on generated_pages.
+        The generate_wiki node uses the deep structure agent with subagents
+        for page generation, eliminating the need for complex batch processing.
 
         Returns:
             Compiled LangGraph StateGraph
@@ -291,169 +93,24 @@ class WikiGenerationAgent:
 
         # Add nodes
         workflow.add_node("analyze_repository", self._analyze_repository_node)
-        workflow.add_node("generate_structure", self._generate_structure_node)
-        workflow.add_node("page_worker", page_worker_node)  # Parallel page generator
-        workflow.add_node("aggregate_pages", aggregate_pages_node)  # Post-aggregation status
+        workflow.add_node("generate_wiki", self._generate_wiki_node)
         workflow.add_node("store_wiki", self._store_wiki_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        # Define workflow edges
+        # Define simple linear workflow
         workflow.add_edge(START, "analyze_repository")
-        workflow.add_edge("analyze_repository", "generate_structure")
-
-        # Fan-out: generate_structure -> parallel page_workers via Send
-        # Each Send creates a separate page_worker execution
-        workflow.add_conditional_edges(
-            "generate_structure",
-            fan_out_to_page_workers,
-            ["page_worker"]
-        )
-
-        # Fan-in: all page_workers -> aggregate_pages
-        # LangGraph aggregates generated_pages via operator.add before this node
-        workflow.add_edge("page_worker", "aggregate_pages")
-
-        # Continue to storage
-        workflow.add_edge("aggregate_pages", "store_wiki")
+        workflow.add_edge("analyze_repository", "generate_wiki")
+        workflow.add_edge("generate_wiki", "store_wiki")
         workflow.add_edge("store_wiki", END)
 
         # Error handling
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile().with_config({"run_name": "wiki_agent.wiki_generation_workflow"})
-        logger.debug("Wiki generation workflow (parallel) created")
+        app = workflow.compile().with_config(
+            {"run_name": "wiki_agent.wiki_generation_workflow"}
+        )
+        logger.debug("Wiki generation workflow (deep structure agent) created")
         return app
-
-    def _load_structure_prompt(self) -> str:
-        """Load wiki structure generation prompt"""
-        return """Analyze this GitHub repository {owner}/{repo} and create a wiki structure for it.
-
-The complete file tree of the project:
-
-<file_tree> {file_tree} </file_tree>
-
-The README file of the project:
-
-<readme> {readme_content} </readme>
-
-I want to create a wiki for this repository. Determine the most logical structure for a wiki based on the repository's content.
-
-IMPORTANT: The wiki content will be generated in 'English' language.
-
-When designing the wiki structure, include pages that would benefit from visual diagrams, such as:
-
-- Architecture overviews
-- Data flow descriptions
-- Component relationships
-- Process workflows
-- State machines
-- Class hierarchies
-
-Create a structured wiki with the following main sections:
-
-- Overview (general information about the project)
-- System Architecture (how the system is designed)
-- Core Features (key functionality)
-- Data Management/Flow: If applicable, how data is stored, processed, accessed, and managed (e.g., database schema, data pipelines, state management).
-- Frontend Components (UI elements, if applicable.)
-- Backend Systems (server-side components)
-- Model Integration (AI model connections)
-- Deployment/Infrastructure (how to deploy, what's the infrastructure like)
-- Extensibility and Customization: If the project architecture supports it, explain how to extend or customize its functionality (e.g., plugins, theming, custom modules, hooks).
-
-Each section should contain relevant pages. For example, the "Frontend Components" section might include pages for "Home Page", "Repository Wiki Page", "Ask Component", etc.
-
-Analyze the repository structure and create a comprehensive wiki organization with:
-
-1. Create 8-12 pages that would make a comprehensive wiki for this repository
-2. Each page should focus on a specific aspect of the codebase (e.g., architecture, key features, setup)
-3. The file_paths should be actual files from the repository that would be used to generate that page
-4. Organize pages into logical sections for easy navigation
-5. Ensure proper cross-references between related pages
-
-The response will be automatically structured according to the required schema."""
-
-    def _load_page_prompt(self) -> str:
-        """Load wiki page generation prompt"""
-        return """You are an expert technical writer and software architect.
-Your task is to generate a comprehensive and accurate technical wiki page in Markdown format about a specific feature, system, or module within a given software project.
-
-You will be given:
-1. The "{page_title}" for the page you need to create.
-2. A list of "RELEVANT_SOURCE_FILES" from the project that you MUST use as the sole basis for the content. You MUST use AT LEAST 5 relevant source files for comprehensive coverage - if fewer are provided, search for additional related files in the codebase.
-
-CRITICAL STARTING INSTRUCTION:
-The very first thing on the page MUST be a <details> block listing ALL the RELEVANT_SOURCE_FILES you used to generate the content. There MUST be AT LEAST 5 source files listed - if fewer were provided, you MUST find additional related files to include.
-Format it exactly like this:
-<details>
-<summary>Relevant source files</summary>
-
-Remember, do not provide any acknowledgements, disclaimers, apologies, or any other preface before the <details> block. JUST START with the <details> block.
-The following files were used as context for generating this wiki page:
-
-{file_list_markdown}
-<!-- Add additional relevant files if fewer than 5 were provided -->
-</details>
-
-Immediately after the <details> block, the main title of the page should be a H1 Markdown heading: # {page_title}.
-
-Based ONLY on the content of the RELEVANT_SOURCE_FILES:
-
-1.  **Introduction:** Start with a concise introduction (1-2 paragraphs) explaining the purpose, scope, and high-level overview of "{page_title}" within the context of the overall project. If relevant, and if information is available in the provided files, link to other potential wiki pages using the format `[Link Text](#page-anchor-or-id)`.
-
-2.  **Detailed Sections:** Break down "{page_title}" into logical sections using H2 (`##`) and H3 (`###`) Markdown headings. For each section:
-    *   Explain the architecture, components, data flow, or logic relevant to the section's focus, as evidenced in the source files.
-    *   Identify key functions, classes, data structures, API endpoints, or configuration elements pertinent to that section.
-
-3.  **Mermaid Diagrams:**
-    *   EXTENSIVELY use Mermaid diagrams (e.g., `flowchart TD`, `sequenceDiagram`, `classDiagram`, `erDiagram`, `graph TD`) to visually represent architectures, flows, relationships, and schemas found in the source files.
-    *   Ensure diagrams are accurate and directly derived from information in the RELEVANT_SOURCE_FILES.
-    *   Provide a brief explanation before or after each diagram to give context.
-    *   CRITICAL: All diagrams MUST follow strict vertical orientation:
-       - Use "graph TD" (top-down) directive for flow diagrams
-       - NEVER use "graph LR" (left-right)
-       - Maximum node width should be 3-4 words
-       - For sequence diagrams:
-         - Start with "sequenceDiagram" directive on its own line
-         - Define ALL participants at the beginning
-         - Use descriptive but concise participant names
-         - Use the correct arrow types:
-           - ->> for request/asynchronous messages
-           - -->> for response messages
-           - -x for failed messages
-         - Include activation boxes using +/- notation
-         - Add notes for clarification using "Note over" or "Note right of"
-
-4.  **Tables:**
-    *   Use Markdown tables to summarize information such as:
-        *   Key features or components and their descriptions.
-        *   API endpoint parameters, types, and descriptions.
-        *   Configuration options, their types, and default values.
-        *   Data model fields, types, constraints, and descriptions.
-
-5.  **Code Snippets:**
-    *   Include short, relevant code snippets (e.g., Python, Java, JavaScript, SQL, JSON, YAML) directly from the RELEVANT_SOURCE_FILES to illustrate key implementation details, data structures, or configurations.
-    *   Ensure snippets are well-formatted within Markdown code blocks with appropriate language identifiers.
-
-6.  **Source Citations (EXTREMELY IMPORTANT):**
-    *   For EVERY piece of significant information, explanation, diagram, table entry, or code snippet, you MUST cite the specific source file(s) and relevant line numbers from which the information was derived.
-    *   Place citations at the end of the paragraph, under the diagram/table, or after the code snippet.
-    *   Use the exact format: `Sources: [filename.ext:start_line-end_line]()` for a range, or `Sources: [filename.ext:line_number]()` for a single line. Multiple files can be cited: `Sources: [file1.ext:1-10](), [file2.ext:5](), [dir/file3.ext]()` (if the whole file is relevant and line numbers are not applicable or too broad).
-    *   If an entire section is overwhelmingly based on one or two files, you can cite them under the section heading in addition to more specific citations within the section.
-    *   IMPORTANT: You MUST cite AT LEAST 5 different source files throughout the wiki page to ensure comprehensive coverage.
-
-7.  **Technical Accuracy:** All information must be derived SOLELY from the RELEVANT_SOURCE_FILES. Do not infer, invent, or use external knowledge about similar systems or common practices unless it's directly supported by the provided code. If information is not present in the provided files, do not include it or explicitly state its absence if crucial to the topic.
-
-8.  **Clarity and Conciseness:** Use clear, professional, and concise technical language suitable for other developers working on or learning about the project. Avoid unnecessary jargon, but use correct technical terms where appropriate.
-
-9.  **Conclusion/Summary:** End with a brief summary paragraph if appropriate for "{page_title}", reiterating the key aspects covered and their significance within the project.
-
-IMPORTANT: Generate the content in 'English' language.
-
-Remember:
-- Ground every claim in the provided source files.
-- Prioritize accuracy and direct representation of the code's functionality and structure.
-- Structure the document logically for easy understanding by other developers."""
 
     async def generate_wiki(
         self,
@@ -462,7 +119,7 @@ Remember:
         readme_content: str = "",
         force_regenerate: bool = False,
     ) -> Dict[str, Any]:
-        """Generate complete wiki for repository
+        """Generate complete wiki for repository.
 
         Args:
             repository_id: Repository identifier
@@ -492,8 +149,6 @@ Remember:
                 "file_tree": file_tree,
                 "readme_content": readme_content,
                 "wiki_structure": None,
-                "generated_pages": [],
-                "current_page": None,
                 "current_step": "starting",
                 "error_message": None,
                 "progress": 0.0,
@@ -503,17 +158,34 @@ Remember:
                         content=f"Generate wiki for repository: {repository_id}"
                     )
                 ],
-                "clone_path": None,  # Will be set in _generate_structure_node
+                "clone_path": None,  # Will be set in _generate_wiki_node
             }
 
             # Execute workflow
             result = await self.workflow.ainvoke(initial_state)
 
+            # Defensive check - workflow should never return None
+            if result is None:
+                logger.error(
+                    "Workflow returned None unexpectedly",
+                    repository_id=repository_id,
+                )
+                return {
+                    "status": "failed",
+                    "repository_id": repository_id,
+                    "error_message": "Workflow returned None - check LangGraph logs",
+                }
+
+            # Count pages with content
+            wiki_structure = result.get("wiki_structure", {})
+            pages = wiki_structure.get("pages", []) if wiki_structure else []
+            pages_with_content = len([p for p in pages if p.get("content")])
+
             return {
                 "status": "completed" if not result.get("error_message") else "failed",
                 "repository_id": repository_id,
-                "wiki_structure": result.get("wiki_structure"),
-                "pages_generated": len(result.get("generated_pages", [])),
+                "wiki_structure": wiki_structure,
+                "pages_generated": pages_with_content,
                 "error_message": result.get("error_message"),
             }
 
@@ -529,7 +201,11 @@ Remember:
     async def _analyze_repository_node(
         self, state: WikiGenerationState
     ) -> WikiGenerationState:
-        """Analyze repository for wiki generation - uses pre-populated values"""
+        """Analyze repository for wiki generation - validates pre-populated values."""
+        logger.info(
+            "Node: analyze_repository - START",
+            repository_id=state.get("repository_id"),
+        )
         try:
             state["current_step"] = "analyzing_repository"
             state["progress"] = 10.0
@@ -558,26 +234,37 @@ Remember:
                 AIMessage(content=f"Analyzed repository with ~{file_count} files")
             )
 
+            logger.info(
+                "Node: analyze_repository - END",
+                repository_id=state.get("repository_id"),
+            )
             return state
 
         except Exception as e:
+            logger.error("Node: analyze_repository - FAILED", error=str(e))
             state["error_message"] = f"Repository analysis failed: {str(e)}"
             return state
 
-    async def _generate_structure_node(
+    async def _generate_wiki_node(
         self, state: WikiGenerationState
     ) -> WikiGenerationState:
-        """Generate wiki structure using Deep Agent for repository exploration."""
+        """Generate wiki using the new workflow.
+
+        Invokes the LangGraph wiki_workflow which handles:
+        - Structure extraction
+        - Sequential page generation
+        - Finalization and storage
+        """
         from pathlib import Path
 
-        from src.agents.deep_structure_agent import run_structure_agent
-        from src.utils.config_loader import get_settings
-
+        logger.info(
+            "Node: generate_wiki - START", repository_id=state.get("repository_id")
+        )
         try:
-            state["current_step"] = "generating_structure"
+            state["current_step"] = "generating_wiki"
             state["progress"] = 30.0
 
-            # Fetch repository from database
+            # Fetch repository from database to get clone_path
             repository = await self._repository_repo.find_one(
                 {"_id": UUID(state["repository_id"])}
             )
@@ -595,60 +282,111 @@ Remember:
                 state["error_message"] = f"Clone path does not exist: {clone_path}"
                 return state
 
-            # IMPORTANT: Set clone_path in state for page workers to access files
+            # Set clone_path in state
             state["clone_path"] = str(clone_path)
 
-            owner = repository.org or "unknown"
-            repo_name = repository.name or "unknown"
+            # Prepare state for new workflow (WikiWorkflowState is a TypedDict)
+            workflow_state: WikiWorkflowState = {
+                "repository_id": state["repository_id"],
+                "clone_path": str(clone_path),
+                "file_tree": state["file_tree"],
+                "readme_content": state["readme_content"],
+                "structure": None,
+                "pages": [],
+                "error": None,
+                "current_step": "init",
+            }
 
-            # Get model from settings
-            settings = get_settings()
-            model = settings.openai_model
-
-            # Run the Deep Agent to explore and generate structure
             logger.info(
-                "Running Deep Agent for wiki structure",
+                "Running wiki_workflow",
                 repository_id=state["repository_id"],
                 clone_path=str(clone_path),
             )
 
-            wiki_structure = await run_structure_agent(
-                clone_path=str(clone_path),
-                owner=owner,
-                repo=repo_name,
-                file_tree=state["file_tree"],
-                readme_content=state["readme_content"],
-                timeout=300.0,  # 5 minute timeout
-                model=model,
-            )
+            # Invoke workflow
+            result = await wiki_workflow.ainvoke(workflow_state)
 
-            if not wiki_structure:
-                state["error_message"] = "Deep Agent failed to generate wiki structure"
+            if result.get("error"):
+                state["error_message"] = result["error"]
                 return state
 
-            if not wiki_structure.get("pages"):
-                state["error_message"] = "Deep Agent produced empty wiki structure"
+            # Extract structure and pages from workflow result
+            structure = result.get("structure")
+            pages = result.get("pages", [])
+
+            if not structure:
+                state["error_message"] = "Wiki workflow failed to generate structure"
                 return state
 
-            state["wiki_structure"] = wiki_structure
-            state["progress"] = 50.0
+            # Convert WikiStructure to dict format expected by _store_wiki_node
+            # The workflow already stored to DB, but we populate wiki_structure
+            # for compatibility with the existing flow
+            pages_data = []
+            for section in structure.sections:
+                for page in section.pages:
+                    # Find page content from generated pages list
+                    page_content = ""
+                    for gen_page in pages:
+                        if gen_page.id == page.id:
+                            page_content = gen_page.content or ""
+                            break
+
+                    pages_data.append({
+                        "id": page.id,
+                        "slug": page.id,
+                        "title": page.title,
+                        "description": page.description,
+                        "importance": page.importance.value if hasattr(page.importance, 'value') else str(page.importance),
+                        "file_paths": page.file_paths,
+                        "related_pages": page.related_pages if hasattr(page, 'related_pages') else [],
+                        "section": section.title,
+                        "content": page_content,
+                    })
+
+            wiki_structure_dict = {
+                "title": structure.title,
+                "description": structure.description,
+                "pages": pages_data,
+            }
+
+            # Store result in state for store_wiki node
+            state["wiki_structure"] = wiki_structure_dict
+            state["progress"] = 90.0
+
+            # Count pages with content
+            pages_with_content = [p for p in pages_data if p.get("content")]
 
             # Add success message
             state["messages"].append(
                 AIMessage(
-                    content=f"Generated wiki structure with {len(wiki_structure.get('pages', []))} pages using Deep Agent exploration"
+                    content=(
+                        f"Generated wiki with {len(pages_data)} pages "
+                        f"({len(pages_with_content)} with content) using wiki_workflow"
+                    )
                 )
             )
 
+            logger.info(
+                "Node: generate_wiki - END",
+                repository_id=state.get("repository_id"),
+                page_count=len(pages_data),
+                pages_with_content=len(pages_with_content),
+            )
             return state
 
         except Exception as e:
-            logger.error(f"Structure generation failed: {e}")
-            state["error_message"] = f"Structure generation failed: {str(e)}"
+            logger.error(
+                "Node: generate_wiki - FAILED",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            state["error_message"] = f"Wiki generation failed: {str(e)}"
             return state
 
-    async def _store_wiki_node(self, state: WikiGenerationState) -> WikiGenerationState:
-        """Store generated wiki in database"""
+    async def _store_wiki_node(
+        self, state: WikiGenerationState
+    ) -> WikiGenerationState:
+        """Store generated wiki in database."""
         try:
             state["current_step"] = "storing_wiki"
             state["progress"] = 95.0
@@ -657,29 +395,22 @@ Remember:
                 state["error_message"] = "No wiki structure to store"
                 return state
 
-            # Create WikiStructure object
             wiki_data = state["wiki_structure"]
-
-            # IMPORTANT: Use generated_pages from parallel workers, not original pages
-            pages_to_store = state.get("generated_pages", [])
-
-            if not pages_to_store:
-                # Fallback to original pages if parallel generation failed
-                pages_to_store = state["wiki_structure"].get("pages", [])
-                logger.warning("No generated pages found, falling back to original structure")
+            pages_to_store = wiki_data.get("pages", [])
 
             if not pages_to_store:
                 state["error_message"] = "No wiki pages to store"
                 return state
 
-            # Build a map of page_id/slug -> WikiPageDetail from generated pages
-            # Parallel workers use 'slug' as the identifier, original uses 'id'
+            # Build a map of page_id/slug -> WikiPageDetail
             pages_map = {}
             for page_data in pages_to_store:
-                # Handle both 'id' and 'slug' as page identifiers
                 page_id = page_data.get("id") or page_data.get("slug")
                 if not page_id:
-                    logger.warning("Page missing id/slug, skipping", page_title=page_data.get("title"))
+                    logger.warning(
+                        "Page missing id/slug, skipping",
+                        page_title=page_data.get("title"),
+                    )
                     continue
 
                 # Handle importance - may be string or PageImportance enum
@@ -703,29 +434,39 @@ Remember:
                 )
                 pages_map[page.id] = page
 
-            # Convert sections to WikiSection objects with embedded pages
-            wiki_sections = []
-            for section_data in wiki_data.get("sections", []):
-                # Get page objects for this section
-                section_pages = []
-                for page_info in section_data.get("pages", []):
-                    # page_info can be a dict (from structured output) or a string ID
-                    if isinstance(page_info, dict):
-                        page_id = page_info.get("id")
-                    else:
-                        page_id = page_info
-                    
-                    if page_id and page_id in pages_map:
-                        section_pages.append(pages_map[page_id])
+            # Build sections from pages
+            from collections import defaultdict
 
+            section_pages_map = defaultdict(list)
+            section_order = []
+
+            for page_data in pages_to_store:
+                section_name = page_data.get("section", "General")
+                page_id = page_data.get("id") or page_data.get("slug")
+
+                if page_id and page_id in pages_map:
+                    if section_name not in section_pages_map:
+                        section_order.append(section_name)
+                    section_pages_map[section_name].append(pages_map[page_id])
+
+            # Create WikiSection objects
+            wiki_sections = []
+            for section_name in section_order:
+                section_id = section_name.lower().replace(" ", "-")
                 section = WikiSection(
-                    id=section_data["id"],
-                    title=section_data["title"],
-                    pages=section_pages,
+                    id=section_id,
+                    title=section_name,
+                    pages=section_pages_map[section_name],
                 )
                 wiki_sections.append(section)
 
-            # Create complete wiki structure (pages are now in sections)
+            logger.info(
+                "Built sections from pages",
+                num_sections=len(wiki_sections),
+                total_pages=sum(len(s.pages) for s in wiki_sections),
+            )
+
+            # Create complete wiki structure
             wiki_structure = WikiStructure(
                 id=f"wiki_{state['repository_id']}",
                 repository_id=UUID(state["repository_id"]),
@@ -736,7 +477,7 @@ Remember:
 
             # Delete existing wiki if force regenerating
             await self._wiki_structure_repo.delete_one(
-                {"repository_id": state["repository_id"]}
+                {"repository_id": UUID(state["repository_id"])}
             )
 
             # Store new wiki
@@ -761,14 +502,13 @@ Remember:
     async def _handle_error_node(
         self, state: WikiGenerationState
     ) -> WikiGenerationState:
-        """Handle error node"""
+        """Handle error node."""
         try:
-            # Log error details
             logger.error(
-                f"Wiki generation failed for repository {state['repository_id']}: {state.get('error_message')}"
+                f"Wiki generation failed for repository {state['repository_id']}: "
+                f"{state.get('error_message')}"
             )
 
-            # Add error message
             state["messages"].append(
                 AIMessage(
                     content=f"Wiki generation failed: {state.get('error_message', 'Unknown error')}"
@@ -784,7 +524,7 @@ Remember:
             return state
 
     async def get_wiki_generation_status(self, repository_id: str) -> Dict[str, Any]:
-        """Get wiki generation status for repository
+        """Get wiki generation status for repository.
 
         Args:
             repository_id: Repository ID
@@ -793,7 +533,6 @@ Remember:
             Dictionary with wiki generation status
         """
         try:
-            # Check if wiki exists
             wiki = await self._wiki_structure_repo.find_one(
                 {"repository_id": UUID(repository_id)}
             )
