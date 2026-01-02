@@ -716,6 +716,27 @@ async def test_generate_pages_node_uses_react_agent_per_page():
 
 
 # =============================================================================
+# Tests for workflow graph structure
+# =============================================================================
+
+
+def test_workflow_includes_aggregate_node():
+    """Workflow should have 4 nodes: extract_structure, generate_pages, aggregate, finalize."""
+    from src.agents.wiki_workflow import create_wiki_workflow
+
+    workflow = create_wiki_workflow()
+
+    # Get node names from the graph (nodes is a dict keyed by node name)
+    graph = workflow.get_graph()
+    node_names = [name for name in graph.nodes.keys() if name not in ("__start__", "__end__")]
+
+    assert "extract_structure" in node_names
+    assert "generate_pages" in node_names
+    assert "aggregate" in node_names
+    assert "finalize" in node_names
+
+
+# =============================================================================
 # Tests for aggregate_node
 # =============================================================================
 

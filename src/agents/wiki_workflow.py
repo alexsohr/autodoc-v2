@@ -519,7 +519,8 @@ def create_wiki_workflow():
     The workflow follows a sequential pattern:
     1. extract_structure: Analyze repo and create wiki structure
     2. generate_pages: Generate content for all pages sequentially
-    3. finalize: Combine results and store to database
+    3. aggregate: Merge page content back into structure
+    4. finalize: Save to database
 
     Returns:
         Compiled LangGraph workflow
@@ -529,12 +530,14 @@ def create_wiki_workflow():
     # Add nodes
     builder.add_node("extract_structure", extract_structure_node)
     builder.add_node("generate_pages", generate_pages_node)
+    builder.add_node("aggregate", aggregate_node)
     builder.add_node("finalize", finalize_node)
 
     # Add edges - simple sequential flow
     builder.add_edge(START, "extract_structure")
     builder.add_edge("extract_structure", "generate_pages")
-    builder.add_edge("generate_pages", "finalize")
+    builder.add_edge("generate_pages", "aggregate")
+    builder.add_edge("aggregate", "finalize")
     builder.add_edge("finalize", END)
 
     return builder.compile()
