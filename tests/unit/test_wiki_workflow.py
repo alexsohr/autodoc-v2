@@ -227,3 +227,174 @@ async def test_extract_structure_node_error():
         assert result["error"] is not None
         assert "Rate limit" in result["error"]
         assert result["current_step"] == "error"
+
+
+# =============================================================================
+# Tests for generate_pages_node
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_generate_pages_node_success():
+    """generate_pages_node should generate content for all pages sequentially."""
+    from unittest.mock import AsyncMock, patch
+    from src.agents.wiki_workflow import generate_pages_node
+    from src.models.wiki import WikiSection, PageImportance
+
+    structure = WikiStructure(
+        id="test-wiki",
+        repository_id="00000000-0000-0000-0000-000000000000",
+        title="Test",
+        description="Test wiki",
+        sections=[
+            WikiSection(
+                id="section1",
+                title="Section 1",
+                pages=[
+                    WikiPageDetail(
+                        id="page1",
+                        title="Page 1",
+                        description="First page",
+                        importance=PageImportance.HIGH,
+                    ),
+                    WikiPageDetail(
+                        id="page2",
+                        title="Page 2",
+                        description="Second page",
+                        importance=PageImportance.MEDIUM,
+                    ),
+                ]
+            )
+        ]
+    )
+
+    state = WikiWorkflowState(
+        repository_id="test-repo",
+        clone_path="/tmp/repo",
+        file_tree="src/\n  main.py",
+        readme_content="# Test",
+        structure=structure,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+    )
+
+    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
+        mock_llm = AsyncMock()
+        # Note: generate_text returns "generated_text" not "content"
+        mock_llm.generate_text.return_value = {
+            "status": "success",
+            "generated_text": "# Generated Content\n\nThis is the generated content."
+        }
+        MockLLMTool.return_value = mock_llm
+
+        result = await generate_pages_node(state)
+
+        assert "pages" in result
+        assert len(result["pages"]) == 2
+        assert result["pages"][0].id == "page1"
+        assert result["pages"][0].content is not None
+        assert result["pages"][0].has_content() is True
+        assert result["pages"][1].id == "page2"
+        assert result["current_step"] == "pages_generated"
+
+
+@pytest.mark.asyncio
+async def test_generate_pages_node_no_structure():
+    """generate_pages_node should handle missing structure gracefully."""
+    from src.agents.wiki_workflow import generate_pages_node
+
+    state = WikiWorkflowState(
+        repository_id="test-repo",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=None,
+        pages=[],
+        error=None,
+        current_step="init",
+    )
+
+    result = await generate_pages_node(state)
+
+    assert result["current_step"] == "error"
+    assert "No structure" in result.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_generate_pages_node_with_existing_error():
+    """generate_pages_node should propagate existing errors."""
+    from src.agents.wiki_workflow import generate_pages_node
+
+    state = WikiWorkflowState(
+        repository_id="test-repo",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=None,
+        pages=[],
+        error="Previous error occurred",
+        current_step="error",
+    )
+
+    result = await generate_pages_node(state)
+
+    assert result["current_step"] == "error"
+    assert "Previous error" in result.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_generate_pages_node_llm_error():
+    """generate_pages_node should handle LLM errors and include error message in content."""
+    from unittest.mock import AsyncMock, patch
+    from src.agents.wiki_workflow import generate_pages_node
+    from src.models.wiki import WikiSection, PageImportance
+
+    structure = WikiStructure(
+        id="test-wiki",
+        repository_id="00000000-0000-0000-0000-000000000000",
+        title="Test",
+        description="Test wiki",
+        sections=[
+            WikiSection(
+                id="section1",
+                title="Section 1",
+                pages=[
+                    WikiPageDetail(
+                        id="page1",
+                        title="Page 1",
+                        description="First page",
+                        importance=PageImportance.HIGH,
+                    ),
+                ]
+            )
+        ]
+    )
+
+    state = WikiWorkflowState(
+        repository_id="test-repo",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=structure,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+    )
+
+    with patch("src.agents.wiki_workflow.LLMTool") as MockLLMTool:
+        mock_llm = AsyncMock()
+        mock_llm.generate_text.return_value = {
+            "status": "error",
+            "error": "Rate limit exceeded"
+        }
+        MockLLMTool.return_value = mock_llm
+
+        result = await generate_pages_node(state)
+
+        # Should still return pages but with error content
+        assert "pages" in result
+        assert len(result["pages"]) == 1
+        assert result["pages"][0].id == "page1"
+        assert "Error generating content" in result["pages"][0].content
+        assert result["current_step"] == "pages_generated"

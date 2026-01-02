@@ -244,3 +244,92 @@ For each page, provide:
         "structure": structure,
         "current_step": "structure_extracted",
     }
+
+
+async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
+    """Generate content for all wiki pages sequentially.
+
+    Iterates through all pages in the structure and generates
+    markdown content for each one using the LLM.
+
+    Args:
+        state: Current state with extracted structure
+
+    Returns:
+        Dict with 'pages' list and updated 'current_step'
+    """
+    # Check for existing errors or missing structure
+    if state.get("error"):
+        return {
+            "error": state.get("error"),
+            "current_step": "error",
+        }
+
+    if not state.get("structure"):
+        return {
+            "error": "No structure available",
+            "current_step": "error",
+        }
+
+    structure = state["structure"]
+    clone_path = state["clone_path"]
+    file_tree = state["file_tree"]
+
+    llm_tool = LLMTool()
+    system_prompt = PROMPTS["page_generation_full"]["system_prompt"]
+
+    generated_pages = []
+    all_pages = structure.get_all_pages()
+
+    for page in all_pages:
+        # Read relevant files if specified
+        file_contents = ""
+        if page.file_paths:
+            for file_path in page.file_paths[:5]:  # Limit to 5 files
+                full_path = Path(clone_path) / file_path
+                if full_path.exists() and full_path.is_file():
+                    try:
+                        content = full_path.read_text(encoding="utf-8", errors="ignore")
+                        file_contents += f"\n\n### File: {file_path}\n```\n{content[:5000]}\n```"
+                    except Exception:
+                        pass
+
+        user_prompt = f"""Generate comprehensive documentation for this wiki page.
+
+## Page Details
+- Title: {page.title}
+- Description: {page.description}
+- Importance: {page.importance.value if hasattr(page.importance, 'value') else page.importance}
+
+## Repository File Tree
+```
+{file_tree}
+```
+
+## Relevant Source Files
+{file_contents if file_contents else "No specific files referenced."}
+
+Generate the markdown content for this page."""
+
+        # IMPORTANT: Use generate_text, not generate
+        result = await llm_tool.generate_text(
+            prompt=user_prompt,
+            system_message=system_prompt,
+        )
+
+        if result["status"] == "error":
+            page_with_content = page.model_copy(update={
+                "content": f"*Error generating content: {result.get('error', 'Unknown')}*"
+            })
+        else:
+            # IMPORTANT: Use "generated_text" not "content"
+            page_with_content = page.model_copy(update={
+                "content": result["generated_text"]
+            })
+
+        generated_pages.append(page_with_content)
+
+    return {
+        "pages": generated_pages,
+        "current_step": "pages_generated",
+    }
