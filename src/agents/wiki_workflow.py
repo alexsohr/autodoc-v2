@@ -333,3 +333,68 @@ Generate the markdown content for this page."""
         "pages": generated_pages,
         "current_step": "pages_generated",
     }
+
+
+async def finalize_node(state: WikiWorkflowState) -> Dict[str, Any]:
+    """Finalize wiki by combining pages and storing to database.
+
+    This is the fan-in step. It takes all generated pages, updates
+    the structure with content, and persists to MongoDB.
+
+    Args:
+        state: State with structure and generated pages
+
+    Returns:
+        Dict with updated current_step
+    """
+    if state.get("error"):
+        return {"current_step": "error"}
+
+    structure = state.get("structure")
+    pages = state.get("pages", [])
+
+    if not structure:
+        return {
+            "error": "No structure available for finalization",
+            "current_step": "error",
+        }
+
+    # Create page lookup by ID
+    page_content_map = {p.id: p.content for p in pages if p.content}
+
+    # Update structure sections with generated content
+    updated_sections = []
+    for section in structure.sections:
+        updated_pages = []
+        for page in section.pages:
+            content = page_content_map.get(page.id)
+            if content:
+                updated_page = page.model_copy(update={"content": content})
+            else:
+                updated_page = page
+            updated_pages.append(updated_page)
+
+        updated_section = section.model_copy(update={"pages": updated_pages})
+        updated_sections.append(updated_section)
+
+    # Create final wiki structure
+    final_wiki = WikiStructure(
+        id=structure.id,
+        repository_id=state["repository_id"],
+        title=structure.title,
+        description=structure.description,
+        sections=updated_sections,
+    )
+
+    # Store to database
+    try:
+        await final_wiki.save()
+    except Exception as e:
+        return {
+            "error": f"Failed to save wiki: {str(e)}",
+            "current_step": "error",
+        }
+
+    return {
+        "current_step": "completed",
+    }
