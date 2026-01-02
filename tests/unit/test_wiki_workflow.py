@@ -445,16 +445,18 @@ async def test_finalize_node_combines_pages():
         current_step="pages_generated",
     )
 
-    with patch("src.agents.wiki_workflow.WikiStructure") as MockWikiStructure:
-        # Mock database storage
-        mock_wiki = MagicMock()
-        mock_wiki.save = AsyncMock()
-        MockWikiStructure.return_value = mock_wiki
+    with patch("src.agents.wiki_workflow.WikiStructureRepository") as MockWikiRepo:
+        # Mock repository upsert
+        mock_repo_instance = MagicMock()
+        mock_repo_instance.upsert = AsyncMock()
+        MockWikiRepo.return_value = mock_repo_instance
 
         result = await finalize_node(state)
 
         assert result["current_step"] == "completed"
         assert result.get("error") is None
+        # Verify repository was called
+        mock_repo_instance.upsert.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -538,11 +540,11 @@ async def test_finalize_node_save_failure():
         current_step="pages_generated",
     )
 
-    with patch("src.agents.wiki_workflow.WikiStructure") as MockWikiStructure:
-        # Mock database storage failure
-        mock_wiki = MagicMock()
-        mock_wiki.save = AsyncMock(side_effect=Exception("Database connection failed"))
-        MockWikiStructure.return_value = mock_wiki
+    with patch("src.agents.wiki_workflow.WikiStructureRepository") as MockWikiRepo:
+        # Mock repository upsert failure
+        mock_repo_instance = MagicMock()
+        mock_repo_instance.upsert = AsyncMock(side_effect=Exception("Database connection failed"))
+        MockWikiRepo.return_value = mock_repo_instance
 
         result = await finalize_node(state)
 

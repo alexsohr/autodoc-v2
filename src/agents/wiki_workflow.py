@@ -12,11 +12,12 @@ import operator
 import yaml
 from pathlib import Path
 from typing import Annotated, Optional, List, TypedDict, Dict, Any
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 from pydantic import BaseModel, Field
 
 from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+from src.repository.wiki_structure_repository import WikiStructureRepository
 from src.tools.llm_tool import LLMTool
 
 
@@ -386,9 +387,13 @@ async def finalize_node(state: WikiWorkflowState) -> Dict[str, Any]:
         sections=updated_sections,
     )
 
-    # Store to database
+    # Store to database using repository layer
     try:
-        await final_wiki.save()
+        wiki_repo = WikiStructureRepository(WikiStructure)
+        await wiki_repo.upsert(
+            repository_id=UUID(state["repository_id"]),
+            wiki=final_wiki
+        )
     except Exception as e:
         return {
             "error": f"Failed to save wiki: {str(e)}",
