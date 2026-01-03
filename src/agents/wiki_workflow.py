@@ -146,11 +146,8 @@ def _convert_llm_structure_to_wiki_structure(
         )
         sections.append(section)
 
-    # Generate a unique wiki ID
-    wiki_id = f"wiki-{uuid4().hex[:8]}"
-
+    # id auto-generates as UUID via default_factory
     return WikiStructure(
-        id=wiki_id,
         repository_id=repository_id,
         title=llm_structure["title"],
         description=llm_structure["description"],
@@ -171,15 +168,10 @@ async def extract_structure_node(state: WikiWorkflowState) -> Dict[str, Any]:
         Dict with 'structure' and updated 'current_step'
     """
     clone_path = state.get("clone_path", "")
-    file_tree = state.get("file_tree", "")
     readme_content = state.get("readme_content", "")
 
     # Create React agent with MCP tools
-    agent = await create_structure_agent(
-        clone_path=clone_path,
-        file_tree=file_tree,
-        readme_content=readme_content,
-    )
+    agent = await create_structure_agent()
 
     # Build user message for the agent
     user_message = f"""Analyze this repository and create a comprehensive wiki structure.
@@ -187,29 +179,10 @@ async def extract_structure_node(state: WikiWorkflowState) -> Dict[str, Any]:
 ## Repository Context
 - Clone Path: {clone_path}
 
-## File Tree
-```
-{file_tree}
-```
-
 ## README
 ```
 {readme_content}
 ```
-
-Explore the codebase using the filesystem tools to understand:
-1. Project architecture and structure
-2. Key modules and their purposes
-3. Important files and their relationships
-
-Then design a wiki with 8-12 pages covering:
-- Overview and Getting Started
-- Architecture and core concepts
-- Key features and functionality
-- API reference (if applicable)
-- Development and deployment guides
-
-Use the filesystem tools to examine actual source files before finalizing the structure.
 """
 
     try:

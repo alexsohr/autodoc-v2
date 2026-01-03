@@ -126,7 +126,7 @@ class WikiGenerationAgent:
                     return {
                         "status": "exists",
                         "message": "Wiki already exists for this repository",
-                        "wiki_id": str(existing_wiki.id),
+                        "id": str(existing_wiki.id),
                     }
 
             # Initialize state
@@ -452,9 +452,8 @@ class WikiGenerationAgent:
                 total_pages=sum(len(s.pages) for s in wiki_sections),
             )
 
-            # Create complete wiki structure
+            # Create complete wiki structure (id auto-generates as UUID)
             wiki_structure = WikiStructure(
-                id=f"wiki_{state['repository_id']}",
                 repository_id=UUID(state["repository_id"]),
                 title=wiki_data["title"],
                 description=wiki_data["description"],

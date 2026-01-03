@@ -482,7 +482,7 @@ class WorkflowOrchestrator:
                     state["progress"] = 90.0
                     state["results"]["wiki_generation"] = {
                         "status": "exists",
-                        "wiki_id": str(existing_wiki.id),
+                        "id": str(existing_wiki.id),
                     }
 
                     state["messages"].append(

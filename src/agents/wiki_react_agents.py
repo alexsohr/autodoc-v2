@@ -11,12 +11,12 @@ giving the agents actual filesystem access.
 """
 
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
 
 import structlog
 import yaml
 from langchain_core.language_models import BaseChatModel
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from pydantic import BaseModel, Field
 
 from src.services.mcp_filesystem_client import MCPFilesystemClient
@@ -40,7 +40,7 @@ PROMPTS = _load_prompts()
 # =============================================================================
 
 
-async def get_mcp_tools() -> List[Any]:
+async def get_mcp_tools(names: Optional[List[str]] = None) -> List[Any]:
     """Get MCP filesystem tools.
 
     Returns:
@@ -49,7 +49,7 @@ async def get_mcp_tools() -> List[Any]:
     mcp_client = MCPFilesystemClient.get_instance()
     if not mcp_client.is_initialized:
         await mcp_client.initialize()
-    return mcp_client.get_tools()
+    return mcp_client.get_tools(names)
 
 
 def get_llm() -> BaseChatModel:
@@ -108,11 +108,7 @@ class LLMWikiStructureSchema(BaseModel):
 # =============================================================================
 
 
-async def create_structure_agent(
-    clone_path: str = "",
-    file_tree: str = "",
-    readme_content: str = "",
-) -> Any:
+async def create_structure_agent() -> Any:
     """Create a React agent for wiki structure extraction.
 
     The agent can explore the codebase using MCP filesystem tools
@@ -126,43 +122,23 @@ async def create_structure_agent(
     Returns:
         Compiled React agent graph with ainvoke() method
     """
-    tools = await get_mcp_tools()
+
+    tools = await get_mcp_tools(names=["read_text_file", "list_directory_with_sizes", "read_multiple_files"])
     llm = get_llm()
 
-    # Extract owner/repo from clone_path if possible
-    path_parts = Path(clone_path).parts if clone_path else []
-    owner = path_parts[-2] if len(path_parts) >= 2 else ""
-    repo = path_parts[-1] if len(path_parts) >= 1 else ""
-
-    # Get exploration instructions for MCP tools
-    exploration_instructions = PROMPTS.get("structure_agent", {}).get(
-        "exploration_mcp", ""
-    )
-    if exploration_instructions:
-        exploration_instructions = exploration_instructions.format(clone_path=clone_path)
-
     # Build system prompt with context
-    system_prompt_template = PROMPTS.get("structure_agent", {}).get("system_prompt", "")
-    system_prompt = system_prompt_template.format(
-        owner=owner,
-        repo=repo,
-        file_tree=file_tree,
-        readme_content=readme_content,
-        clone_path=clone_path,
-        exploration_instructions=exploration_instructions,
-    )
-
+    system_prompt = PROMPTS.get("structure_agent", {}).get("system_prompt", "")
+    
     # Create React agent with MCP tools and structured output
-    agent = create_react_agent(
+    agent = create_agent(
         model=llm,
         tools=tools,
-        prompt=system_prompt,
+        system_prompt=system_prompt,
         response_format=LLMWikiStructureSchema,
     )
 
     logger.info(
         "Created structure agent",
-        clone_path=clone_path,
         num_tools=len(tools),
     )
 
@@ -186,79 +162,28 @@ async def create_page_agent(
     Returns:
         Compiled React agent graph with ainvoke() method
     """
-    tools = await get_mcp_tools()
+    tools = await get_mcp_tools(names=["read_text_file", "read_multiple_files"])
     llm = get_llm()
 
-    # Try to get page_generation_react prompt, fall back to page_generation_full
-    page_prompt = PROMPTS.get("page_generation_react", {}).get("system_prompt", "")
-
-    if not page_prompt:
-        # Use page_generation_full with MCP tool instructions
-        page_prompt_template = PROMPTS.get("page_generation_full", {}).get(
-            "system_prompt", ""
-        )
-        tool_instructions = PROMPTS.get("page_generation_full", {}).get(
-            "tool_instructions_mcp", ""
-        )
-        if tool_instructions:
-            tool_instructions = tool_instructions.format(clone_path=clone_path)
-
-        if page_prompt_template:
-            # Fill in what we can; page-specific fields will be filled at invocation
-            page_prompt = page_prompt_template.format(
-                page_title="{page_title}",  # Placeholder for invocation
-                page_description="{page_description}",
-                file_hints_str="{file_hints_str}",
-                clone_path=clone_path,
-                repo_name=Path(clone_path).name if clone_path else "",
-                repo_description="{repo_description}",
-                tool_instructions=tool_instructions,
-            )
-
-    # Final fallback to a comprehensive default prompt
-    if not page_prompt:
-        page_prompt = f"""You are an expert technical writer generating wiki documentation.
-
-## Available Filesystem Tools
-
-You have FULL access to filesystem tools:
-- `read_text_file(path)`: Read COMPLETE file content (no head limit!)
-- `list_directory(path)`: List directory contents
-- `search_files(path, pattern)`: Search for files
-
-All paths must be absolute, starting with: {clone_path}
-
-## CRITICAL: Full File Reading Strategy
-
-For documentation, you MUST read files COMPLETELY:
-
-**DO:**
-- Read the ENTIRE content of files assigned to this page
-- Understand implementation details, data flow, logic
-- Extract actual code snippets for examples
-- Note specific line numbers for citations
-- Read related files if needed for full context
-
-**DON'T:**
-- Use head parameter (you need full content)
-- Skip reading files
-- Guess at implementation details
-- Cite lines without reading them
-
-## Documentation Requirements
-
-Generate comprehensive markdown including:
-- Clear explanations of functionality
-- Mermaid diagrams for architecture (use graph TD, never LR)
-- Code snippets from actual source files
-- Source citations: `Sources: [filename:line-range]()`
-"""
+    # Use page_generation_full with MCP tool instructions
+    page_prompt_template = PROMPTS.get("page_generation_full", {}).get(
+        "system_prompt", ""
+    )
+    
+    page_prompt = page_prompt_template.format(
+        page_title="{page_title}",  # Placeholder for invocation
+        page_description="{page_description}",
+        file_hints_str="{file_hints_str}",
+        clone_path=clone_path,
+        repo_name=Path(clone_path).name if clone_path else "",
+        repo_description="{repo_description}"
+    )
 
     # Create React agent with MCP tools (no structured output - returns markdown)
-    agent = create_react_agent(
+    agent = create_agent(
         model=llm,
         tools=tools,
-        prompt=page_prompt,
+        system_prompt=page_prompt,
     )
 
     logger.info(

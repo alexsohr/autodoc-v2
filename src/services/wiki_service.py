@@ -142,9 +142,6 @@ class WikiGenerationService:
                     "error_type": "WikiNotFound",
                 }
 
-            # Convert to WikiStructure model
-            wiki_data["id"] = wiki_data.get("id", f"wiki_{repository_id}")
-
             # Convert sections to WikiSection objects with embedded pages
             sections = []
             for section_data in wiki_data.get("sections", []):
@@ -165,7 +162,6 @@ class WikiGenerationService:
 
             # Create complete wiki structure
             wiki_structure = WikiStructure(
-                id=wiki_data["id"],
                 repository_id=repository_id,
                 title=wiki_data["title"],
                 description=wiki_data["description"],

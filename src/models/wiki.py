@@ -7,7 +7,7 @@ WikiStructure, WikiPageDetail, and WikiSection based on data-model.md.
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pymongo import TEXT, IndexModel
@@ -236,8 +236,8 @@ class WikiStructure(BaseDocument):
     with their embedded pages.
     """
 
-    # Core identification
-    id: str = Field(description="Unique wiki identifier")
+    # Core identification - uses UUID pattern like all other collections
+    id: UUID = Field(default_factory=uuid4, description="Unique wiki identifier")
     repository_id: UUID = Field(description="Repository identifier")
     title: str = Field(description="Wiki title")
     description: str = Field(description="Wiki description")
@@ -255,14 +255,6 @@ class WikiStructure(BaseDocument):
         ]
 
     model_config = ConfigDict(validate_assignment=True)
-
-    @field_validator("id")
-    @classmethod
-    def validate_id(cls, v: str) -> str:
-        """Validate wiki ID format"""
-        if not v or not v.strip():
-            raise ValueError("Wiki ID cannot be empty")
-        return v.strip()
 
     @field_validator("title")
     @classmethod

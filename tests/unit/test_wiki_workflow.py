@@ -42,7 +42,6 @@ def test_wiki_workflow_state_with_structure():
     )
 
     structure = WikiStructure(
-        id="test-wiki",
         repository_id=uuid4(),
         title="Test Wiki",
         description="A test wiki",
@@ -240,7 +239,6 @@ async def test_generate_pages_node_success():
     from src.models.wiki import WikiSection, PageImportance
 
     structure = WikiStructure(
-        id="test-wiki",
         repository_id="00000000-0000-0000-0000-000000000000",
         title="Test",
         description="Test wiki",
@@ -348,7 +346,6 @@ async def test_generate_pages_node_agent_error():
     from src.models.wiki import WikiSection, PageImportance
 
     structure = WikiStructure(
-        id="test-wiki",
         repository_id="00000000-0000-0000-0000-000000000000",
         title="Test",
         description="Test wiki",
@@ -411,7 +408,6 @@ async def test_finalize_node_saves_aggregated_structure():
 
     # Structure with content already merged (from aggregate step)
     structure = WikiStructure(
-        id="wiki-test",
         repository_id="12345678-1234-5678-1234-567812345678",
         title="Test Wiki",
         description="Test",
@@ -511,7 +507,6 @@ async def test_finalize_node_save_failure():
 
     # Structure with content already merged (from aggregate step)
     structure = WikiStructure(
-        id="test-wiki",
         repository_id="00000000-0000-0000-0000-000000000000",
         title="Test Wiki",
         description="Test description",
@@ -663,7 +658,6 @@ async def test_generate_pages_node_uses_react_agent_per_page():
 
     # Create a structure with 2 pages
     structure = WikiStructure(
-        id="wiki-test",
         repository_id="12345678-1234-5678-1234-567812345678",
         title="Test Wiki",
         description="Test",
@@ -758,7 +752,6 @@ async def test_aggregate_node_merges_content_into_structure():
 
     # Structure without content
     structure = WikiStructure(
-        id="wiki-test",
         repository_id="12345678-1234-5678-1234-567812345678",
         title="Test Wiki",
         description="Test",
@@ -866,7 +859,6 @@ async def test_aggregate_node_multiple_pages():
 
     # Structure with multiple sections and pages
     structure = WikiStructure(
-        id="wiki-test",
         repository_id="12345678-1234-5678-1234-567812345678",
         title="Test Wiki",
         description="Test",

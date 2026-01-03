@@ -299,12 +299,11 @@ class TestWikiService:
         """Test wiki generation validation"""
         repository_id = uuid4()
 
-        with patch("src.services.data_access.get_mongodb_adapter", new_callable=AsyncMock) as mock_db:
-            mock_mongodb = AsyncMock()
-            mock_db.return_value = mock_mongodb
-
-            # Mock repository not found
-            mock_mongodb.get_repository.return_value = None
+        # Mock repository not found - the service will check for repository existence
+        with patch("src.repository.repository_repository.RepositoryRepository") as mock_repo_class:
+            mock_repo_instance = AsyncMock()
+            mock_repo_class.return_value = mock_repo_instance
+            mock_repo_instance.find_one = AsyncMock(return_value=None)
 
             result = await wiki_service.generate_wiki(repository_id)
 
