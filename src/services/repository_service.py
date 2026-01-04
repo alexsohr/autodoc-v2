@@ -7,12 +7,12 @@ CRUD operations, webhook configuration, and analysis workflow coordination.
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from ..agents.workflow import WorkflowType, workflow_orchestrator
+from ..agents.workflow import WorkflowOrchestrator, WorkflowType
 from ..models.repository import (
     AccessScope,
     AnalysisStatus,
@@ -21,8 +21,9 @@ from ..models.repository import (
     RepositoryProvider,
     RepositoryUpdate,
 )
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..repository.repository_repository import RepositoryRepository
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,22 @@ class RepositoryService:
     webhook configuration, and status tracking.
     """
 
-    def __init__(self):
-        """Initialize repository service"""
+    def __init__(
+        self,
+        repository_repo: RepositoryRepository,
+        code_document_repo: CodeDocumentRepository,
+        workflow_orchestrator: Optional[WorkflowOrchestrator] = None,
+    ):
+        """Initialize repository service with repository dependency injection."""
         self.settings = get_settings()
         self.supported_providers = {
             "github.com": RepositoryProvider.GITHUB,
             "bitbucket.org": RepositoryProvider.BITBUCKET,
             "gitlab.com": RepositoryProvider.GITLAB,
         }
+        self._repository_repo = repository_repo
+        self._code_document_repo = code_document_repo
+        self._workflow_orchestrator = workflow_orchestrator
 
     async def create_repository(
         self, repository_data: RepositoryCreate
@@ -85,10 +94,7 @@ class RepositoryService:
                 }
 
             # Check if repository already exists
-            mongodb = await get_mongodb_adapter()
-            existing_repo = await mongodb.find_document(
-                "repositories", {"url": repository_data.url}
-            )
+            existing_repo = await self._repository_repo.get_by_url(repository_data.url)
             if existing_repo:
                 return {
                     "status": "error",
@@ -110,23 +116,16 @@ class RepositoryService:
                 analysis_status=AnalysisStatus.PENDING,
             )
 
-            # Store in database
-            repo_dict = repository.model_dump()
-            repo_dict["id"] = str(repository.id)
+            # Store in database using repository pattern
+            created_repo = await self._repository_repo.create(repository)
 
-            await mongodb.insert_document("repositories", repo_dict)
-
-            # Start analysis workflow (async)
-            asyncio.create_task(
-                self._trigger_analysis(
-                    str(repository.id), repository_data.url, repository_data.branch
-                )
-            )
+            # Note: Analysis is NOT auto-triggered on creation.
+            # Use the /analyze endpoint to explicitly start analysis.
 
             return {
                 "status": "success",
-                "repository": repository.model_dump(),
-                "message": "Repository created and analysis started",
+                "repository": created_repo.model_dump(),
+                "message": "Repository created successfully",
             }
 
         except Exception as e:
@@ -143,8 +142,7 @@ class RepositoryService:
             Dictionary with repository data or error
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.get_repository(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             if repository:
                 return {"status": "success", "repository": repository.model_dump()}
@@ -178,17 +176,8 @@ class RepositoryService:
             Dictionary with repository list and metadata
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
-            # Build query filter
-            query_filter = {}
-            if status_filter:
-                query_filter["analysis_status"] = status_filter
-            if provider_filter:
-                query_filter["provider"] = provider_filter
-
-            # Get repositories
-            repositories, total_count = await mongodb.list_repositories(
+            # Get repositories using repository pattern
+            repositories, total_count = await self._repository_repo.list_paginated(
                 limit=limit, offset=offset, status_filter=status_filter
             )
 
@@ -235,13 +224,12 @@ class RepositoryService:
                     "error_type": "InvalidInput",
                 }
 
-            # Update repository
-            mongodb = await get_mongodb_adapter()
-            success = await mongodb.update_repository(repository_id, update_dict)
+            # Update repository using repository pattern
+            success = await self._repository_repo.update(repository_id, update_dict)
 
             if success:
                 # Get updated repository
-                updated_repo = await mongodb.get_repository(repository_id)
+                updated_repo = await self._repository_repo.get(repository_id)
                 return {
                     "status": "success",
                     "repository": updated_repo.model_dump() if updated_repo else None,
@@ -268,10 +256,8 @@ class RepositoryService:
             Dictionary with deletion result
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
             # Check if repository exists
-            repository = await mongodb.get_repository(repository_id)
+            repository = await self._repository_repo.get(repository_id)
             if not repository:
                 return {
                     "status": "error",
@@ -280,7 +266,7 @@ class RepositoryService:
                 }
 
             # Delete repository and all related data
-            success = await mongodb.delete_repository(repository_id)
+            success = await self._repository_repo.delete(repository_id)
 
             if success:
                 return {
@@ -312,8 +298,7 @@ class RepositoryService:
             Dictionary with analysis trigger result
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.get_repository(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             if not repository:
                 return {
@@ -323,7 +308,14 @@ class RepositoryService:
                 }
 
             # Check if analysis is already in progress
-            if repository.analysis_status == AnalysisStatus.PROCESSING and not force:
+            # Note: analysis_status may be string or enum depending on use_enum_values setting
+            current_status = (
+                repository.analysis_status.value
+                if hasattr(repository.analysis_status, "value")
+                else repository.analysis_status
+            )
+
+            if current_status == AnalysisStatus.PROCESSING.value and not force:
                 return {
                     "status": "error",
                     "error": "Analysis already in progress",
@@ -331,11 +323,11 @@ class RepositoryService:
                 }
 
             # Check if analysis is completed and force is not set
-            if repository.analysis_status == AnalysisStatus.COMPLETED and not force:
+            if current_status == AnalysisStatus.COMPLETED.value and not force:
                 return {
                     "status": "success",
                     "message": "Repository already analyzed",
-                    "analysis_status": repository.analysis_status.value,
+                    "analysis_status": current_status,
                     "last_analyzed": (
                         repository.last_analyzed.isoformat()
                         if repository.last_analyzed
@@ -344,7 +336,7 @@ class RepositoryService:
                 }
 
             # Update status to processing
-            await mongodb.update_repository(
+            await self._repository_repo.update(
                 repository_id,
                 {
                     "analysis_status": AnalysisStatus.PROCESSING.value,
@@ -353,7 +345,7 @@ class RepositoryService:
             )
 
             # Start analysis workflow
-            workflow_result = await workflow_orchestrator.execute_workflow(
+            workflow_result = await self._workflow_orchestrator.execute_workflow(
                 workflow_type=WorkflowType.FULL_ANALYSIS,
                 repository_id=str(repository_id),
                 repository_url=repository.url,
@@ -374,8 +366,7 @@ class RepositoryService:
 
             # Reset status on error
             try:
-                mongodb = await get_mongodb_adapter()
-                await mongodb.update_repository(
+                await self._repository_repo.update(
                     repository_id,
                     {
                         "analysis_status": AnalysisStatus.FAILED.value,
@@ -397,8 +388,7 @@ class RepositoryService:
             Dictionary with analysis status
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.get_repository(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             if not repository:
                 return {
@@ -407,23 +397,15 @@ class RepositoryService:
                     "error_type": "NotFound",
                 }
 
-            # Get document count
-            doc_count = await mongodb.count_documents(
-                "code_documents", {"repository_id": str(repository_id)}
+            doc_count = await self._code_document_repo.count({"repository_id": str(repository_id)})
+            embedding_count = await self._code_document_repo.count(
+                {"repository_id": str(repository_id), "embedding": {"$exists": True}}
             )
 
-            # Get embedding count
-            embedding_count = await mongodb.count_documents(
-                "code_documents",
-                {"repository_id": str(repository_id), "embedding": {"$exists": True}},
-            )
-
-            # Calculate progress
             progress = 0.0
             if repository.analysis_status == AnalysisStatus.COMPLETED:
                 progress = 100.0
             elif repository.analysis_status == AnalysisStatus.PROCESSING:
-                # Estimate progress based on documents processed
                 if doc_count > 0:
                     progress = min(90.0, (embedding_count / doc_count) * 80.0 + 10.0)
                 else:
@@ -431,10 +413,14 @@ class RepositoryService:
             elif repository.analysis_status == AnalysisStatus.FAILED:
                 progress = 0.0
 
+            # Handle both enum and string types for analysis_status
+            # (Repository model uses use_enum_values=True, so values may be strings)
+            status_value = getattr(repository.analysis_status, 'value', repository.analysis_status)
+
             return {
                 "status": "success",
                 "repository_id": str(repository_id),
-                "analysis_status": repository.analysis_status.value,
+                "analysis_status": status_value,
                 "progress": progress,
                 "current_step": self._get_current_step(repository.analysis_status),
                 "last_analyzed": (
@@ -487,7 +473,6 @@ class RepositoryService:
                 }
 
             # Update repository webhook configuration
-            mongodb = await get_mongodb_adapter()
             updates = {
                 "webhook_configured": True,
                 "webhook_secret": webhook_secret,
@@ -495,7 +480,7 @@ class RepositoryService:
                 "updated_at": datetime.now(timezone.utc),
             }
 
-            success = await mongodb.update_repository(repository_id, updates)
+            success = await self._repository_repo.update(repository_id, updates)
 
             if not success:
                 return {
@@ -505,7 +490,7 @@ class RepositoryService:
                 }
 
             # Get updated repository for response
-            repository = await mongodb.get_repository(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             # Generate setup instructions
             setup_instructions = self._generate_webhook_setup_instructions(repository)
@@ -533,8 +518,7 @@ class RepositoryService:
             Dictionary with webhook configuration
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.get_repository(repository_id)
+            repository = await self._repository_repo.get(repository_id)
 
             if not repository:
                 return {
@@ -570,8 +554,7 @@ class RepositoryService:
             Repository object or None
         """
         try:
-            mongodb = await get_mongodb_adapter()
-            return await mongodb.get_repository_by_url(repository_url)
+            return await self._repository_repo.get_by_url(repository_url)
         except Exception as e:
             logger.error(f"Find repository by URL failed: {e}")
             return None
@@ -633,13 +616,12 @@ class RepositoryService:
                 }
 
             # Update webhook event timestamp
-            mongodb = await get_mongodb_adapter()
-            await mongodb.update_repository(
+            await self._repository_repo.update(
                 repository.id, {"last_webhook_event": datetime.now(timezone.utc)}
             )
 
             # Trigger incremental analysis
-            workflow_result = await workflow_orchestrator.execute_workflow(
+            workflow_result = await self._workflow_orchestrator.execute_workflow(
                 workflow_type=WorkflowType.INCREMENTAL_UPDATE,
                 repository_id=str(repository.id),
                 repository_url=repository.url,
@@ -878,7 +860,7 @@ class RepositoryService:
             branch: Branch to analyze
         """
         try:
-            await workflow_orchestrator.execute_workflow(
+            await self._workflow_orchestrator.execute_workflow(
                 workflow_type=WorkflowType.FULL_ANALYSIS,
                 repository_id=repository_id,
                 repository_url=repository_url,
@@ -894,52 +876,27 @@ class RepositoryService:
             Dictionary with repository statistics
         """
         try:
-            mongodb = await get_mongodb_adapter()
+            stats = await self._repository_repo.get_statistics()
 
-            # Get total repositories
-            total_repos = await mongodb.count_documents("repositories", {})
-
-            # Get repositories by status
-            status_counts = {}
-            for status in AnalysisStatus:
-                count = await mongodb.count_documents(
-                    "repositories", {"analysis_status": status.value}
-                )
-                status_counts[status.value] = count
-
-            # Get repositories by provider
-            provider_counts = {}
-            for provider in RepositoryProvider:
-                count = await mongodb.count_documents(
-                    "repositories", {"provider": provider.value}
-                )
-                provider_counts[provider.value] = count
-
-            # Get recent activity
-            recent_repos = await mongodb.find_documents(
-                "repositories", {}, limit=5, sort_field="updated_at"
-            )
+            recent_activity = [
+                {
+                    "id": repo.id,
+                    "name": f"{repo.org}/{repo.name}",
+                    "status": repo.analysis_status,
+                    "updated_at": repo.updated_at,
+                }
+                for repo in stats["recent"]
+            ]
 
             return {
                 "status": "success",
-                "total_repositories": total_repos,
-                "status_breakdown": status_counts,
-                "provider_breakdown": provider_counts,
-                "recent_activity": [
-                    {
-                        "id": repo["id"],
-                        "name": f"{repo['org']}/{repo['name']}",
-                        "status": repo["analysis_status"],
-                        "updated_at": repo["updated_at"],
-                    }
-                    for repo in recent_repos
-                ],
+                "total_repositories": stats["total"],
+                "status_breakdown": stats["by_status"],
+                "provider_breakdown": stats["by_provider"],
+                "recent_activity": recent_activity,
             }
 
         except Exception as e:
             logger.error(f"Get repository statistics failed: {e}")
             return {"status": "error", "error": str(e), "error_type": type(e).__name__}
 
-
-# Global repository service instance
-repository_service = RepositoryService()

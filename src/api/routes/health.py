@@ -7,11 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, status
 from pydantic import BaseModel
 
-# Import database manager for health checks
-try:
-    from src.utils.database import db_manager
-except ImportError:
-    db_manager = None
+from src.repository.database import health_check as data_health_check
 
 router = APIRouter(prefix="/health", tags=["health"])
 
@@ -43,12 +39,12 @@ async def readiness_check():
     """Readiness check for Kubernetes/ECS"""
     checks = {"database": False, "timestamp": datetime.now(timezone.utc)}
 
-    # Check database connection
-    if db_manager:
-        try:
-            checks["database"] = await db_manager.health_check()
-        except Exception:
-            checks["database"] = False
+    try:
+        db_status = await data_health_check()
+        checks["database"] = db_status.get("status") == "healthy"
+        checks["database_details"] = db_status
+    except Exception:
+        checks["database"] = False
 
     # Determine overall status
     all_ready = all([checks["database"]])

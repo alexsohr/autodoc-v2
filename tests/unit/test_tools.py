@@ -114,7 +114,8 @@ class TestEmbeddingTool:
         """Create embedding tool instance"""
         return EmbeddingTool()
 
-    def test_similarity_calculation(self, embedding_tool):
+    @pytest.mark.asyncio
+    async def test_similarity_calculation(self, embedding_tool):
         """Test cosine similarity calculation"""
         # Test vectors
         vec1 = [1.0, 0.0, 0.0]
@@ -163,7 +164,7 @@ class TestEmbeddingTool:
                 [0.1, 0.2, 0.3]
             ] * 10
 
-            with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+            with patch("src.services.data_access.get_mongodb_adapter") as mock_db:
                 mock_mongodb = AsyncMock()
                 mock_db.return_value = mock_mongodb
                 mock_mongodb.store_document_embedding.return_value = None
@@ -225,7 +226,8 @@ def standalone_function():
         assert len(structure["classes"]) >= 1  # TestClass
         assert len(structure["imports"]) >= 2  # os, sys
 
-    def test_relevance_score_calculation(self, context_tool):
+    @pytest.mark.asyncio
+    async def test_relevance_score_calculation(self, context_tool):
         """Test relevance score calculation"""
         mock_context = {
             "similarity_score": 0.8,
@@ -438,7 +440,7 @@ class TestToolPerformance:
             for i in range(50)
         ]
 
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter") as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
             mock_mongodb.vector_search.return_value = mock_results
@@ -472,7 +474,7 @@ class TestToolErrorRecovery:
         """Test context tool search fallback"""
         context_tool = ContextTool()
 
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter") as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 

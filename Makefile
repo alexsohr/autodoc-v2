@@ -1,4 +1,4 @@
-.PHONY: help install dev-install lint format type-check test test-cov clean run docker-build docker-run
+.PHONY: help install dev-install lint format type-check test test-cov clean clean-cache dev-run run docker-build docker-run
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -46,7 +46,14 @@ clean: ## Clean up build artifacts
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
 
-run: ## Run the development server
+clean-cache: ## Clean cache files using Python script (cross-platform)
+	python scripts/clean_cache.py
+
+dev-run: clean-cache ## Clean cache and run the development server
+	@echo "Starting AutoDoc v2 development server (with cache cleaning)..."
+	python -m src.api.main
+
+run: ## Run the development server (without cache cleaning)
 	python -m src.api.main
 
 run-prod: ## Run with gunicorn (production)

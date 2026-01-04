@@ -8,11 +8,13 @@ import logging
 from typing import List, Optional
 from uuid import UUID
 
+from dependencies import get_auth_service
 from fastapi import Depends, HTTPException, status
 from fastapi.requests import Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ...services.auth_service import TokenData, User, auth_service
+from ...models.user import TokenData, User
+from ...services.auth_service import AuthenticationService
 from ...utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -28,9 +30,15 @@ class AuthMiddleware:
     and permission checking for API endpoints.
     """
 
-    def __init__(self):
-        """Initialize authentication middleware"""
+    def __init__(self, auth_service: AuthenticationService = None):
+        """Initialize authentication middleware with dependency injection.
+        
+        Args:
+            auth_service: AuthenticationService instance. If None, creates a new instance
+                         (for backward compatibility).
+        """
         self.settings = get_settings()
+        self.auth_service = auth_service if auth_service is not None else AuthenticationService()
         self.public_paths = {
             "/",
             "/health",
@@ -69,7 +77,7 @@ class AuthMiddleware:
                 )
 
             # Validate token and get user
-            user = await auth_service.get_current_user(token)
+            user = await self.auth_service.get_current_user(token)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -178,6 +186,8 @@ async def get_current_user(
         )
 
     # Validate token and get user
+    # Note: This function should be converted to accept auth_service as dependency
+    auth_service = get_auth_service()
     user = await auth_service.get_current_user(credentials.credentials)
     if not user:
         raise HTTPException(
@@ -251,6 +261,7 @@ def require_scopes(required_scopes: List[str]):
         Raises:
             HTTPException: If user lacks required scopes
         """
+        auth_service = get_auth_service()
         if not auth_service.check_permissions(current_user, required_scopes):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -260,7 +271,3 @@ def require_scopes(required_scopes: List[str]):
         return current_user
 
     return check_scopes
-
-
-# Middleware instance
-auth_middleware = AuthMiddleware()

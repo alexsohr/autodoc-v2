@@ -23,36 +23,68 @@ from src.api.middleware.error_handler import (
 )
 from src.api.middleware.logging import request_logging_middleware
 from src.api.routes import chat, health, repositories, webhooks, wiki
+from src.repository.database import close_mongodb, init_mongodb
+from src.services.mcp_filesystem_client import close_mcp_filesystem, init_mcp_filesystem
 from src.utils.config_loader import get_settings
-from src.utils.database import close_database, init_database
+from src.utils.logging_config import setup_logging
+
+import structlog
+
+# Initialize structured logging early
+setup_logging()
+logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan management"""
     # Startup
-    print("AutoDoc v2 starting up...")
+    logger.info("AutoDoc v2 starting up...")
     try:
-        # Initialize database connections
-        await init_database()
-        print("Database initialized successfully")
+        # Configure LangSmith tracing
+        settings = get_settings()
+        settings.configure_langsmith()
+        settings.configure_llm_environment()
+        if settings.is_langsmith_enabled:
+            logger.info("LangSmith tracing enabled", project=settings.langsmith_project)
+        else:
+            logger.info("LangSmith tracing disabled (no API key provided)")
+
+        # Initialize data access layer (MongoDB/Beanie)
+        await init_mongodb()
+        logger.info("Database initialized successfully")
+
+        # Initialize MCP filesystem client (if enabled)
+        if settings.mcp_filesystem_enabled:
+            mcp_initialized = await init_mcp_filesystem()
+            if mcp_initialized:
+                logger.info("MCP filesystem client initialized successfully")
+            else:
+                logger.warning("MCP filesystem client initialization failed (will use fallback)")
+        else:
+            logger.info("MCP filesystem integration disabled")
+
         # TODO: Initialize storage adapters
         # TODO: Load LLM configurations
     except Exception as e:
-        print(f"Failed to initialize database: {e}")
+        logger.exception("Failed to initialize", error=str(e))
         raise
 
     yield
 
     # Shutdown
-    print("AutoDoc v2 shutting down...")
+    logger.info("AutoDoc v2 shutting down...")
     try:
+        # Close MCP filesystem client
+        await close_mcp_filesystem()
+        logger.info("MCP filesystem client closed")
+
         # Close database connections
-        await close_database()
-        print("Database connections closed")
+        await close_mongodb()
+        logger.info("Database connections closed")
         # TODO: Cleanup resources
     except Exception as e:
-        print(f"Error during shutdown: {e}")
+        logger.error("Error during shutdown", error=str(e))
 
 
 def create_app() -> FastAPI:
@@ -183,7 +215,7 @@ generates comprehensive documentation, and provides intelligent chat-based queri
         """Generate custom OpenAPI schema with security schemes"""
         if app.openapi_schema:
             return app.openapi_schema
-        
+
         openapi_schema = get_openapi(
             title=app.title,
             version=app.version,
@@ -194,55 +226,43 @@ generates comprehensive documentation, and provides intelligent chat-based queri
             license_info=app.license_info,
             openapi_version="3.1.0",
         )
-        
+
         # Add security schemes (ensure components section exists)
         if "components" not in openapi_schema:
             openapi_schema["components"] = {}
-        
+
         openapi_schema["components"]["securitySchemes"] = {
             "BearerAuth": {
                 "type": "http",
                 "scheme": "bearer",
                 "bearerFormat": "JWT",
-                "description": "JWT Bearer token authentication. Obtain token via login endpoint."
+                "description": "JWT Bearer token authentication. Obtain token via login endpoint.",
             },
             "ApiKeyAuth": {
                 "type": "apiKey",
                 "in": "header",
                 "name": "X-API-Key",
-                "description": "API key authentication for service-to-service communication."
-            }
+                "description": "API key authentication for service-to-service communication.",
+            },
         }
-        
+
         # Add global security requirement (can be overridden per endpoint)
-        openapi_schema["security"] = [
-            {"BearerAuth": []},
-            {"ApiKeyAuth": []}
-        ]
-        
+        openapi_schema["security"] = [{"BearerAuth": []}, {"ApiKeyAuth": []}]
+
         # Add servers information
         openapi_schema["servers"] = [
-            {
-                "url": "/",
-                "description": "Current server"
-            },
-            {
-                "url": "http://localhost:8000",
-                "description": "Local development server"
-            },
-            {
-                "url": "https://api.autodoc.dev",
-                "description": "Production server"
-            }
+            {"url": "/", "description": "Current server"},
+            {"url": "http://localhost:8000", "description": "Local development server"},
+            {"url": "https://api.autodoc.dev", "description": "Production server"},
         ]
-        
+
         # Add additional metadata
         openapi_schema["info"]["termsOfService"] = "https://autodoc.dev/terms"
         openapi_schema["info"]["x-logo"] = {
             "url": "https://autodoc.dev/logo.png",
-            "altText": "AutoDoc v2 Logo"
+            "altText": "AutoDoc v2 Logo",
         }
-        
+
         app.openapi_schema = openapi_schema
         return app.openapi_schema
 
@@ -258,11 +278,29 @@ app = create_app()
 
 def main():
     """Main entry point for running the application"""
+    # Patterns to exclude from file watching (matching .gitignore)
+    reload_excludes = [
+        ".env",
+        "venv",
+        ".pytest_cache",
+        "__pycache__",
+        "*.egg-info",
+        "data",
+        ".claude",
+        ".serena",
+        "logs",
+        "*.pyc",
+        "*.pyo",
+        ".git",
+    ]
+
     uvicorn.run(
         "src.api.main:app",
         host=os.getenv("API_HOST", "0.0.0.0"),
         port=int(os.getenv("API_PORT", "8000")),
         reload=os.getenv("RELOAD", "true").lower() == "true",
+        reload_dirs=["src"],
+        reload_excludes=reload_excludes,
         workers=int(os.getenv("WORKERS", "1")),
         log_level=os.getenv("LOG_LEVEL", "info").lower(),
     )

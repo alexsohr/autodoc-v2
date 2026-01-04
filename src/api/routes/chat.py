@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
+from ...dependencies import get_chat_service
 from ...models.chat import (
     ChatSessionList,
     ChatSessionResponse,
@@ -19,8 +20,8 @@ from ...models.chat import (
     QuestionRequest,
     SessionStatus,
 )
-from ...services.auth_service import User
-from ...services.chat_service import chat_service
+from ...models.user import User
+from ...services.chat_service import ChatService
 
 logger = logging.getLogger(__name__)
 
@@ -60,21 +61,23 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
                             "created_at": "2024-01-01T12:00:00Z",
                             "last_activity": "2024-01-01T12:00:00Z",
                             "status": "active",
-                            "message_count": 0
+                            "message_count": 0,
                         }
                     }
-                }
+                },
             }
         }
-    }
+    },
 )
 async def create_chat_session(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """Create chat session"""
     try:
         # Create session using service
-        result = await chat_service.create_chat_session(repository_id)
+        result = await service.create_chat_session(repository_id)
 
         if result["status"] != "success":
             error_type = result.get("error_type", "UnknownError")
@@ -133,6 +136,7 @@ async def list_chat_sessions(
     limit: int = Query(50, ge=1, le=100, description="Number of sessions to return"),
     offset: int = Query(0, ge=0, description="Number of sessions to skip"),
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """List chat sessions"""
     try:
@@ -147,7 +151,7 @@ async def list_chat_sessions(
             )
 
         # List sessions using service
-        result = await chat_service.list_chat_sessions(
+        result = await service.list_chat_sessions(
             repository_id=repository_id,
             status_filter=status_filter,
             limit=limit,
@@ -192,11 +196,12 @@ async def get_chat_session(
     repository_id: UUID,
     session_id: UUID,
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """Get chat session details"""
     try:
         # Get session using service
-        result = await chat_service.get_chat_session(repository_id, session_id)
+        result = await service.get_chat_session(repository_id, session_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -241,11 +246,12 @@ async def delete_chat_session(
     repository_id: UUID,
     session_id: UUID,
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """End chat session"""
     try:
         # Delete session using service
-        result = await chat_service.delete_chat_session(repository_id, session_id)
+        result = await service.delete_chat_session(repository_id, session_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -293,31 +299,31 @@ async def delete_chat_session(
                             "description": "Ask about overall architecture or patterns",
                             "value": {
                                 "content": "How does authentication work in this application?",
-                                "context_hint": "auth"
-                            }
+                                "context_hint": "auth",
+                            },
                         },
                         "specific_function": {
                             "summary": "Specific Function Question",
                             "description": "Ask about a specific function or method",
                             "value": {
                                 "content": "What does the create_user function do and what parameters does it accept?",
-                                "context_hint": "user creation"
-                            }
+                                "context_hint": "user creation",
+                            },
                         },
                         "debugging_help": {
                             "summary": "Debugging Question",
                             "description": "Ask for help understanding error handling",
                             "value": {
                                 "content": "How are validation errors handled in the API endpoints?"
-                            }
+                            },
                         },
                         "best_practices": {
                             "summary": "Best Practices Question",
                             "description": "Ask about code patterns and best practices",
                             "value": {
                                 "content": "What testing patterns are used in this codebase?"
-                            }
-                        }
+                            },
+                        },
                     }
                 }
             }
@@ -336,8 +342,8 @@ async def delete_chat_session(
                                 "context_files": [
                                     "src/auth/authentication.py",
                                     "src/middleware/auth_middleware.py",
-                                    "src/models/user.py"
-                                ]
+                                    "src/models/user.py",
+                                ],
                             },
                             "answer": {
                                 "id": "789e1234-e89b-12d3-a456-426614174002",
@@ -350,25 +356,26 @@ async def delete_chat_session(
                                         "line_end": 25,
                                         "commit_sha": "abc123def456789012345678901234567890abcd",
                                         "url": "https://github.com/myorg/myrepo/blob/main/src/auth/authentication.py#L15-L25",
-                                        "excerpt": "def authenticate_user(username: str, password: str):\\n    # JWT token generation logic\\n    ..."
+                                        "excerpt": "def authenticate_user(username: str, password: str):\\n    # JWT token generation logic\\n    ...",
                                     }
                                 ],
                                 "confidence_score": 0.92,
                                 "generation_time": 2.3,
-                                "timestamp": "2024-01-01T12:05:02Z"
-                            }
+                                "timestamp": "2024-01-01T12:05:02Z",
+                            },
                         }
                     }
-                }
+                },
             }
-        }
-    }
+        },
+    },
 )
 async def ask_question(
     repository_id: UUID,
     session_id: UUID,
     question_request: QuestionRequest,
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """Submit a question about the repository codebase"""
     try:
@@ -383,7 +390,7 @@ async def ask_question(
             )
 
         # Ask question using service
-        result = await chat_service.ask_question(
+        result = await service.ask_question(
             repository_id=repository_id,
             session_id=session_id,
             question_request=question_request,
@@ -489,6 +496,7 @@ async def get_conversation_history(
         None, description="Get messages before this timestamp"
     ),
     current_user: User = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
 ):
     """Get conversation history"""
     try:
@@ -509,7 +517,7 @@ async def get_conversation_history(
                 )
 
         # Get conversation history using service
-        result = await chat_service.get_conversation_history(
+        result = await service.get_conversation_history(
             repository_id=repository_id,
             session_id=session_id,
             limit=limit,

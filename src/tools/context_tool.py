@@ -13,9 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from ..models.code_document import CodeDocument
-from ..tools.embedding_tool import embedding_tool
-from ..utils.mongodb_adapter import get_mongodb_adapter
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..tools.embedding_tool import EmbeddingTool
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +64,13 @@ class ContextTool(BaseTool):
         "Tool for semantic search and context retrieval from code repositories"
     )
 
-    def __init__(self):
+    def __init__(self, embedding_tool: EmbeddingTool, code_document_repo: CodeDocumentRepository):
+        """Initialize ContextTool with dependency injection.
+        
+        Args:
+            embedding_tool: EmbeddingTool instance (injected via DI).
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+        """
         super().__init__()
         # Initialize configuration
         self._max_context_length = 8000  # Maximum context length in characters
@@ -76,6 +81,8 @@ class ContextTool(BaseTool):
             "file_importance": 0.1,
             "code_quality": 0.1,
         }
+        self._embedding_tool = embedding_tool
+        self._code_document_repo = code_document_repo
 
     async def _arun(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Async run method for LangGraph"""
@@ -119,13 +126,10 @@ class ContextTool(BaseTool):
             Dictionary with search results and metadata
         """
         try:
-            # Get MongoDB adapter
-            mongodb = await get_mongodb_adapter()
-
             # Generate query embedding for vector search
             query_embedding = None
             if search_type in ["vector", "hybrid"]:
-                query_embedding = await embedding_tool.get_embedding_for_query(query)
+                query_embedding = await self._embedding_tool.get_embedding_for_query(query)
                 if not query_embedding:
                     logger.warning(
                         "Could not generate query embedding, falling back to text search"
@@ -187,19 +191,18 @@ class ContextTool(BaseTool):
         score_threshold: float,
     ) -> List[Dict[str, Any]]:
         """Perform vector similarity search"""
-        mongodb = await get_mongodb_adapter()
-
         from uuid import UUID
 
         repo_uuid = UUID(repository_id) if repository_id else None
 
-        return await mongodb.vector_search(
-            query_embedding=query_embedding,
+        results = await self._code_document_repo.vector_search(
+            query_embedding,
             repository_id=repo_uuid,
             language_filter=language_filter,
             k=k,
             score_threshold=score_threshold,
         )
+        return results
 
     async def _text_search(
         self,
@@ -208,50 +211,18 @@ class ContextTool(BaseTool):
         language_filter: Optional[str],
         k: int,
     ) -> List[Dict[str, Any]]:
-        """Perform text-based search with proper textScore ranking"""
-        mongodb = await get_mongodb_adapter()
-        collection = mongodb.get_collection("code_documents")
+        """Perform text search using repository"""
+        from uuid import UUID
 
-        # Build text search query
-        search_query = {"$text": {"$search": query}}
+        repo_uuid = UUID(repository_id) if repository_id else None
 
-        if repository_id:
-            search_query["repository_id"] = repository_id
-        if language_filter:
-            search_query["language"] = language_filter
-
-        # Execute search with textScore projection and sorting
-        cursor = (
-            collection.find(search_query, {"score": {"$meta": "textScore"}})
-            .sort([("score", {"$meta": "textScore"})])
-            .limit(k)
+        results = await self._code_document_repo.hybrid_search(
+            query_text=query,
+            query_embedding=None,
+            repository_id=repo_uuid,
+            language_filter=language_filter,
+            k=k,
         )
-
-        # Convert to expected format
-        results = []
-        async for doc in cursor:
-            from uuid import UUID
-
-            # Convert repository_id back to UUID
-            doc["repository_id"] = UUID(doc["repository_id"])
-            
-            # Remove embedding field if present (not needed for results)
-            doc.pop("embedding", None)
-            
-            # Extract the text score
-            text_score = doc.get("score", 0.0)
-            
-            # Create CodeDocument instance
-            code_doc = CodeDocument(**doc)
-
-            results.append(
-                {
-                    "document": code_doc,
-                    "score": text_score,
-                    "source": "text",
-                }
-            )
-
         return results
 
     async def _hybrid_search(
@@ -263,19 +234,18 @@ class ContextTool(BaseTool):
         k: int,
     ) -> List[Dict[str, Any]]:
         """Perform hybrid search combining vector and text search"""
-        mongodb = await get_mongodb_adapter()
-
         from uuid import UUID
 
         repo_uuid = UUID(repository_id) if repository_id else None
 
-        return await mongodb.hybrid_search(
+        results = await self._code_document_repo.hybrid_search(
             query_text=query,
             query_embedding=query_embedding,
             repository_id=repo_uuid,
             language_filter=language_filter,
             k=k,
         )
+        return results
 
     def _apply_file_path_filter(
         self, results: List[Dict[str, Any]], file_path_filter: str
@@ -967,4 +937,6 @@ class ContextTool(BaseTool):
 
 
 # Tool instance for LangGraph
-context_tool = ContextTool()
+# Deprecated: Module-level singleton removed
+# Use get_context_tool() from src.dependencies with FastAPI's Depends() instead
+# context_tool = ContextTool()  # REMOVED - use dependency injection

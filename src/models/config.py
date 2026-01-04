@@ -7,7 +7,14 @@ LLMConfig and StorageConfig based on data-model.md specifications.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, field_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_serializer,
+    field_validator,
+)
 
 
 class LLMProvider(str, Enum):
@@ -52,12 +59,9 @@ class LLMConfig(BaseModel):
     # Connection settings
     timeout: int = Field(default=30, description="Request timeout (seconds)")
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        use_enum_values=True
-    )
-    
-    @field_serializer('api_key')
+    model_config = ConfigDict(validate_assignment=True, use_enum_values=True)
+
+    @field_serializer("api_key")
     def serialize_api_key(self, value: SecretStr) -> str | None:
         """Serialize SecretStr for JSON output"""
         return value.get_secret_value() if value else None
@@ -188,10 +192,7 @@ class StorageConfig(BaseModel):
     backup_enabled: bool = Field(default=False, description="Backup configuration flag")
     retention_days: int = Field(default=30, description="Data retention period")
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        use_enum_values=True
-    )
+    model_config = ConfigDict(validate_assignment=True, use_enum_values=True)
 
     @field_validator("base_path")
     @classmethod
@@ -294,9 +295,7 @@ class AppConfig(BaseModel):
         default=100, description="Embedding generation batch size"
     )
 
-    model_config = ConfigDict(
-        validate_assignment=True
-    )
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("max_concurrent_analyses")
     @classmethod
@@ -399,9 +398,7 @@ class LLMConfigResponse(BaseModel):
     timeout: int = Field(description="Timeout in seconds")
     has_api_key: bool = Field(description="Whether API key is configured")
 
-    model_config = ConfigDict(
-        use_enum_values=True
-    )
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class StorageConfigCreate(BaseModel):
@@ -425,6 +422,4 @@ class StorageConfigResponse(BaseModel):
     retention_days: int = Field(description="Retention days")
     connection_params: Dict[str, Any] = Field(description="Connection parameters")
 
-    model_config = ConfigDict(
-        use_enum_values=True
-    )
+    model_config = ConfigDict(use_enum_values=True)

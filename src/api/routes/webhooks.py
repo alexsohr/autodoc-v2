@@ -8,10 +8,11 @@ import json
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from ...services.repository_service import repository_service
+from ...dependencies import get_repository_service
+from ...services.repository_service import RepositoryService
 from ...utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                     "full_name": "myorg/myrepo",
                                     "html_url": "https://github.com/myorg/myrepo",
                                     "clone_url": "https://github.com/myorg/myrepo.git",
-                                    "default_branch": "main"
+                                    "default_branch": "main",
                                 },
                                 "commits": [
                                     {
@@ -46,11 +47,11 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                         "message": "Update README.md",
                                         "author": {
                                             "name": "John Doe",
-                                            "email": "john@example.com"
-                                        }
+                                            "email": "john@example.com",
+                                        },
                                     }
-                                ]
-                            }
+                                ],
+                            },
                         },
                         "pull_request_event": {
                             "summary": "Pull Request Event",
@@ -61,14 +62,14 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                     "id": 123456,
                                     "number": 42,
                                     "title": "Add new feature",
-                                    "state": "open"
+                                    "state": "open",
                                 },
                                 "repository": {
                                     "full_name": "myorg/myrepo",
-                                    "html_url": "https://github.com/myorg/myrepo"
-                                }
-                            }
-                        }
+                                    "html_url": "https://github.com/myorg/myrepo",
+                                },
+                            },
+                        },
                     }
                 }
             }
@@ -86,8 +87,8 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                     "message": "Repository analysis triggered",
                                     "repository_id": "550e8400-e29b-41d4-a716-446655440000",
                                     "event_type": "push",
-                                    "processing_time": 0.5
-                                }
+                                    "processing_time": 0.5,
+                                },
                             },
                             "ignored": {
                                 "summary": "Event Ignored",
@@ -96,21 +97,34 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
                                     "message": "Event type not subscribed",
                                     "repository_id": "550e8400-e29b-41d4-a716-446655440000",
                                     "event_type": "issues",
-                                    "processing_time": 0.1
-                                }
-                            }
+                                    "processing_time": 0.1,
+                                },
+                            },
                         }
                     }
-                }
+                },
             }
-        }
-    }
+        },
+    },
 )
 async def github_webhook(
     request: Request,
-    x_github_event: str = Header(..., alias="X-GitHub-Event", description="GitHub event type (e.g., push, pull_request)"),
-    x_hub_signature_256: str = Header(..., alias="X-Hub-Signature-256", description="GitHub webhook signature for validation"),
-    x_github_delivery: str = Header(..., alias="X-GitHub-Delivery", description="Unique delivery ID for this webhook"),
+    x_github_event: str = Header(
+        ...,
+        alias="X-GitHub-Event",
+        description="GitHub event type (e.g., push, pull_request)",
+    ),
+    x_hub_signature_256: str = Header(
+        ...,
+        alias="X-Hub-Signature-256",
+        description="GitHub webhook signature for validation",
+    ),
+    x_github_delivery: str = Header(
+        ...,
+        alias="X-GitHub-Delivery",
+        description="Unique delivery ID for this webhook",
+    ),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """GitHub webhook endpoint"""
     try:
@@ -153,7 +167,7 @@ async def github_webhook(
             f"Processing GitHub webhook: {x_github_event} for {repository_url}"
         )
 
-        result = await repository_service.process_webhook_event(
+        result = await service.process_webhook_event(
             repository_url=repository_url,
             event_type=x_github_event,
             payload=payload,
@@ -235,6 +249,7 @@ async def bitbucket_webhook(
     request: Request,
     x_event_key: str = Header(..., alias="X-Event-Key"),
     x_hook_uuid: str = Header(..., alias="X-Hook-UUID"),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Bitbucket webhook endpoint"""
     try:
@@ -277,7 +292,7 @@ async def bitbucket_webhook(
         # Process webhook using service
         logger.info(f"Processing Bitbucket webhook: {x_event_key} for {repository_url}")
 
-        result = await repository_service.process_webhook_event(
+        result = await service.process_webhook_event(
             repository_url=repository_url,
             event_type=x_event_key,
             payload=payload,

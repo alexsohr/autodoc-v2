@@ -10,13 +10,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from ..agents.wiki_agent import wiki_agent
+from ..agents.wiki_agent import WikiGenerationAgent
 from ..models.repository import Repository
 from ..models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
-from ..tools.context_tool import context_tool
-from ..tools.llm_tool import llm_tool
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..repository.wiki_structure_repository import WikiStructureRepository
+from ..tools.context_tool import ContextTool
+from ..tools.llm_tool import LLMTool
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,29 @@ class WikiGenerationService:
     content generation, and documentation management.
     """
 
-    def __init__(self):
-        """Initialize wiki generation service"""
+    def __init__(
+        self,
+        wiki_structure_repo: WikiStructureRepository,
+        code_document_repo: CodeDocumentRepository,
+        wiki_agent: WikiGenerationAgent,
+        context_tool: ContextTool,
+        llm_tool: LLMTool,
+    ):
+        """Initialize wiki generation service with dependency injection.
+        
+        Args:
+            wiki_structure_repo: WikiStructureRepository instance (injected via DI).
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+            wiki_agent: WikiGenerationAgent instance (injected via DI).
+            context_tool: ContextTool instance (injected via DI).
+            llm_tool: LLMTool instance (injected via DI).
+        """
         self.settings = get_settings()
+        self._wiki_structure_repo = wiki_structure_repo
+        self._code_document_repo = code_document_repo
+        self._wiki_agent = wiki_agent
+        self._context_tool = context_tool
+        self._llm_tool = llm_tool
 
     async def generate_wiki(
         self, repository_id: UUID, force_regenerate: bool = False
@@ -46,8 +67,10 @@ class WikiGenerationService:
         """
         try:
             # Check if repository exists and is analyzed
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.get_repository(repository_id)
+            from ..repository.repository_repository import RepositoryRepository
+            from ..models.repository import Repository
+            repo_repository = RepositoryRepository(Repository)
+            repository = await repo_repository.find_one({"id": repository_id})
 
             if not repository:
                 return {
@@ -57,9 +80,7 @@ class WikiGenerationService:
                 }
 
             # Check if repository is analyzed
-            doc_count = await mongodb.count_documents(
-                "code_documents", {"repository_id": str(repository_id)}
-            )
+            doc_count = await self._code_document_repo.count({"repository_id": str(repository_id)})
             if doc_count == 0:
                 return {
                     "status": "error",
@@ -68,7 +89,7 @@ class WikiGenerationService:
                 }
 
             # Generate wiki using wiki agent
-            generation_result = await wiki_agent.generate_wiki(
+            generation_result = await self._wiki_agent.generate_wiki(
                 repository_id=str(repository_id), force_regenerate=force_regenerate
             )
 
@@ -108,12 +129,11 @@ class WikiGenerationService:
             Dictionary with wiki structure
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
             # Get wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await self._wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -122,32 +142,30 @@ class WikiGenerationService:
                     "error_type": "WikiNotFound",
                 }
 
-            # Convert to WikiStructure model
-            wiki_data["id"] = wiki_data.get("id", f"wiki_{repository_id}")
-
-            # Convert pages to WikiPageDetail objects
-            pages = []
-            for page_data in wiki_data.get("pages", []):
-                if not include_content:
-                    page_data["content"] = ""  # Exclude content if not requested
-
-                page = WikiPageDetail(**page_data)
-                pages.append(page)
-
-            # Convert sections to WikiSection objects
+            # Convert sections to WikiSection objects with embedded pages
             sections = []
             for section_data in wiki_data.get("sections", []):
-                section = WikiSection(**section_data)
+                # Convert pages within section
+                section_pages = []
+                for page_data in section_data.get("pages", []):
+                    if not include_content:
+                        page_data["content"] = ""  # Exclude content if not requested
+                    page = WikiPageDetail(**page_data)
+                    section_pages.append(page)
+
+                section = WikiSection(
+                    id=section_data["id"],
+                    title=section_data["title"],
+                    pages=section_pages,
+                )
                 sections.append(section)
 
             # Create complete wiki structure
             wiki_structure = WikiStructure(
-                id=wiki_data["id"],
+                repository_id=repository_id,
                 title=wiki_data["title"],
                 description=wiki_data["description"],
-                pages=pages,
                 sections=sections,
-                root_sections=wiki_data.get("root_sections", []),
             )
 
             # Apply section filter if specified
@@ -187,12 +205,11 @@ class WikiGenerationService:
             Dictionary with page data
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
             # Get wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await self._wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -201,11 +218,14 @@ class WikiGenerationService:
                     "error_type": "WikiNotFound",
                 }
 
-            # Find specific page
+            # Find specific page within sections
             page_data = None
-            for page in wiki_data.get("pages", []):
-                if page["id"] == page_id:
-                    page_data = page
+            for section in wiki_data.get("sections", []):
+                for page in section.get("pages", []):
+                    if page["id"] == page_id:
+                        page_data = page
+                        break
+                if page_data:
                     break
 
             if not page_data:
@@ -256,12 +276,11 @@ class WikiGenerationService:
             Dictionary with update result
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
             # Update page content in wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await self._wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
 
             if not wiki_data:
                 return {
@@ -270,14 +289,17 @@ class WikiGenerationService:
                     "error_type": "WikiNotFound",
                 }
 
-            # Find and update page
-            pages = wiki_data.get("pages", [])
+            # Find and update page within sections
+            sections = wiki_data.get("sections", [])
             page_found = False
 
-            for page in pages:
-                if page["id"] == page_id:
-                    page["content"] = new_content
-                    page_found = True
+            for section in sections:
+                for page in section.get("pages", []):
+                    if page["id"] == page_id:
+                        page["content"] = new_content
+                        page_found = True
+                        break
+                if page_found:
                     break
 
             if not page_found:
@@ -288,13 +310,12 @@ class WikiGenerationService:
                 }
 
             # Update wiki structure in database
-            wiki_data["pages"] = pages
+            wiki_data["sections"] = sections
             wiki_data["updated_at"] = datetime.now(timezone.utc)
 
-            success = await mongodb.update_document(
-                "wiki_structures",
+            success = await self._wiki_structure_repo.update_one(
                 {"repository_id": str(repository_id)},
-                {"pages": pages, "updated_at": wiki_data["updated_at"]},
+                {"sections": sections, "updated_at": wiki_data["updated_at"]},
             )
 
             if success:
@@ -340,10 +361,11 @@ class WikiGenerationService:
             Dictionary with PR creation result
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
             # Get repository
-            repository = await mongodb.get_repository(repository_id)
+            from ..repository.repository_repository import RepositoryRepository
+            from ..models.repository import Repository
+            repo_repository = RepositoryRepository(Repository)
+            repository = await repo_repository.find_one({"id": repository_id})
             if not repository:
                 return {
                     "status": "error",
@@ -352,9 +374,10 @@ class WikiGenerationService:
                 }
 
             # Get wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await self._wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
             if not wiki_data:
                 return {
                     "status": "error",
@@ -406,28 +429,18 @@ class WikiGenerationService:
         """
         try:
             # Find the requested section
-            target_section = None
-            for section in wiki_structure.sections:
-                if section.id == section_id:
-                    target_section = section
-                    break
+            target_section = wiki_structure.get_section(section_id)
 
             if not target_section:
                 return wiki_structure  # Return original if section not found
 
-            # Filter pages to only include those in the section
-            filtered_pages = [
-                page for page in wiki_structure.pages if page.id in target_section.pages
-            ]
-
-            # Create filtered structure
+            # Create filtered structure with only the target section
             filtered_structure = WikiStructure(
                 id=wiki_structure.id,
+                repository_id=wiki_structure.repository_id,
                 title=wiki_structure.title,
                 description=wiki_structure.description,
-                pages=filtered_pages,
                 sections=[target_section],
-                root_sections=[section_id],
             )
 
             return filtered_structure
@@ -455,13 +468,14 @@ class WikiGenerationService:
             if readme_content:
                 doc_files.append({"path": "docs/README.md", "content": readme_content})
 
-            # Generate individual page files
-            for page_data in wiki_data.get("pages", []):
-                if page_data.get("content"):
-                    file_path = f"docs/{page_data['id']}.md"
-                    doc_files.append(
-                        {"path": file_path, "content": page_data["content"]}
-                    )
+            # Generate individual page files from sections
+            for section in wiki_data.get("sections", []):
+                for page_data in section.get("pages", []):
+                    if page_data.get("content"):
+                        file_path = f"docs/{page_data['id']}.md"
+                        doc_files.append(
+                            {"path": file_path, "content": page_data["content"]}
+                        )
 
             # Generate navigation index
             nav_content = self._generate_navigation_index(wiki_data)
@@ -495,25 +509,18 @@ This documentation is organized into the following sections:
 
 """
 
-            # Add section links
+            # Add section links (pages are now embedded in sections)
             for section_data in wiki_data.get("sections", []):
                 section_title = section_data.get("title", section_data["id"])
                 readme_content += f"### {section_title}\n\n"
 
-                for page_id in section_data.get("pages", []):
-                    # Find page details
-                    page_data = None
-                    for page in wiki_data.get("pages", []):
-                        if page["id"] == page_id:
-                            page_data = page
-                            break
-
-                    if page_data:
-                        page_title = page_data.get("title", page_id)
-                        page_desc = page_data.get("description", "")
-                        readme_content += (
-                            f"- [{page_title}](docs/{page_id}.md) - {page_desc}\n"
-                        )
+                for page_data in section_data.get("pages", []):
+                    page_id = page_data.get("id") if isinstance(page_data, dict) else page_data
+                    page_title = page_data.get("title", page_id) if isinstance(page_data, dict) else page_id
+                    page_desc = page_data.get("description", "") if isinstance(page_data, dict) else ""
+                    readme_content += (
+                        f"- [{page_title}](docs/{page_id}.md) - {page_desc}\n"
+                    )
 
                 readme_content += "\n"
 
@@ -546,18 +553,9 @@ This documentation is organized into the following sections:
 
 """
 
-            # Generate hierarchical navigation
-            for section_id in wiki_data.get("root_sections", []):
-                section_data = None
-                for section in wiki_data.get("sections", []):
-                    if section["id"] == section_id:
-                        section_data = section
-                        break
-
-                if section_data:
-                    nav_content += self._generate_section_nav(
-                        section_data, wiki_data, level=1
-                    )
+            # Generate navigation for all sections
+            for section_data in wiki_data.get("sections", []):
+                nav_content += self._generate_section_nav(section_data, level=1)
 
             return nav_content
 
@@ -566,13 +564,12 @@ This documentation is organized into the following sections:
             return None
 
     def _generate_section_nav(
-        self, section_data: Dict[str, Any], wiki_data: Dict[str, Any], level: int = 1
+        self, section_data: Dict[str, Any], level: int = 1
     ) -> str:
         """Generate navigation for a section
 
         Args:
-            section_data: Section data
-            wiki_data: Complete wiki data
+            section_data: Section data with embedded pages
             level: Nesting level
 
         Returns:
@@ -581,30 +578,11 @@ This documentation is organized into the following sections:
         indent = "  " * (level - 1)
         nav_content = f"{indent}- **{section_data.get('title', section_data['id'])}**\n"
 
-        # Add pages
-        for page_id in section_data.get("pages", []):
-            page_data = None
-            for page in wiki_data.get("pages", []):
-                if page["id"] == page_id:
-                    page_data = page
-                    break
-
-            if page_data:
-                page_title = page_data.get("title", page_id)
-                nav_content += f"{indent}  - [{page_title}](docs/{page_id}.md)\n"
-
-        # Add subsections
-        for subsection_id in section_data.get("subsections", []):
-            subsection_data = None
-            for section in wiki_data.get("sections", []):
-                if section["id"] == subsection_id:
-                    subsection_data = section
-                    break
-
-            if subsection_data:
-                nav_content += self._generate_section_nav(
-                    subsection_data, wiki_data, level + 1
-                )
+        # Add pages (now embedded in section)
+        for page_data in section_data.get("pages", []):
+            page_id = page_data.get("id") if isinstance(page_data, dict) else page_data
+            page_title = page_data.get("title", page_id) if isinstance(page_data, dict) else page_id
+            nav_content += f"{indent}  - [{page_title}](docs/{page_id}.md)\n"
 
         return nav_content
 
@@ -685,7 +663,7 @@ This pull request contains updated documentation generated by AutoDoc v2.
         """
         try:
             # Use wiki agent to get status
-            status_result = await wiki_agent.get_wiki_generation_status(
+            status_result = await self._wiki_agent.get_wiki_generation_status(
                 str(repository_id)
             )
 
@@ -709,23 +687,28 @@ This pull request contains updated documentation generated by AutoDoc v2.
         page_id: str,
         additional_context: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Regenerate content for a specific wiki page
+        """Regenerate content for a specific wiki page using React agent.
+
+        Uses the React agent architecture with MCP filesystem tools to
+        regenerate a single wiki page's content.
 
         Args:
             repository_id: Repository UUID
             page_id: Page identifier
-            additional_context: Additional context for generation
+            additional_context: Additional context for generation (optional)
 
         Returns:
             Dictionary with regeneration result
         """
-        try:
-            mongodb = await get_mongodb_adapter()
+        from pathlib import Path
+        from ..agents.wiki_react_agents import create_page_agent
 
+        try:
             # Get wiki structure
-            wiki_data = await mongodb.find_document(
-                "wiki_structures", {"repository_id": str(repository_id)}
+            wiki = await self._wiki_structure_repo.find_one(
+                {"repository_id": str(repository_id)}
             )
+            wiki_data = self._wiki_structure_repo.serialize(wiki) if wiki else None
             if not wiki_data:
                 return {
                     "status": "error",
@@ -733,11 +716,14 @@ This pull request contains updated documentation generated by AutoDoc v2.
                     "error_type": "WikiNotFound",
                 }
 
-            # Find page
+            # Find page within sections
             page_data = None
-            for page in wiki_data.get("pages", []):
-                if page["id"] == page_id:
-                    page_data = page
+            for section in wiki_data.get("sections", []):
+                for page in section.get("pages", []):
+                    if page["id"] == page_id:
+                        page_data = page
+                        break
+                if page_data:
                     break
 
             if not page_data:
@@ -747,10 +733,92 @@ This pull request contains updated documentation generated by AutoDoc v2.
                     "error_type": "PageNotFound",
                 }
 
-            # Regenerate page content using wiki agent
-            new_content = await wiki_agent._generate_page_content(
-                page_data, str(repository_id)
-            )
+            # Get repository to find clone_path
+            from ..repository.repository_repository import RepositoryRepository
+            from ..models.repository import Repository as RepositoryModel
+            repo_repository = RepositoryRepository(RepositoryModel)
+            repository = await repo_repository.find_one({"id": repository_id})
+
+            if not repository:
+                return {
+                    "status": "error",
+                    "error": "Repository not found",
+                    "error_type": "NotFound",
+                }
+
+            # Validate clone_path exists
+            if not repository.clone_path:
+                return {
+                    "status": "error",
+                    "error": "Repository not cloned - no local path available",
+                    "error_type": "RepositoryNotCloned",
+                }
+
+            clone_path = Path(repository.clone_path)
+            if not clone_path.exists():
+                return {
+                    "status": "error",
+                    "error": f"Clone path does not exist: {clone_path}",
+                    "error_type": "ClonePathNotFound",
+                }
+
+            # Create React agent with MCP filesystem tools
+            agent = await create_page_agent(clone_path=str(clone_path))
+
+            # Build user message for page regeneration
+            file_list = "\n".join(
+                f"- {clone_path}/{fp}" for fp in page_data.get("file_paths", [])
+            ) if page_data.get("file_paths") else "No specific files assigned"
+
+            additional_instructions = ""
+            if additional_context:
+                additional_instructions = f"\n\n## Additional Context\n{additional_context}"
+
+            user_message = f"""Generate comprehensive documentation for this wiki page.
+
+## Page Details
+- Title: {page_data.get('title', page_id)}
+- Description: {page_data.get('description', '')}
+- Importance: {page_data.get('importance', 'medium')}
+
+## Files to Read (MUST READ ALL COMPLETELY)
+{file_list}
+{additional_instructions}
+
+## CRITICAL Instructions
+
+1. **READ ALL FILES COMPLETELY** - Use read_file WITHOUT the head parameter
+   - You need full implementation details, not just headers
+   - Read each file in the list above in its entirety
+
+2. **Understand the implementation** - After reading:
+   - Data structures and their purposes
+   - Function logic and data flow
+   - Error handling patterns
+   - Integration with other components
+
+3. **Generate comprehensive documentation** including:
+   - Clear explanation with implementation details
+   - Mermaid diagrams (use graph TD, never LR)
+   - Actual code snippets from source files
+   - Source citations: Sources: [filename:line-range]()
+
+4. **Start output with:** # {page_data.get('title', page_id)}
+
+Remember: All file paths are absolute. Read files COMPLETELY, not just headers!
+"""
+
+            # Invoke the React agent
+            result = await agent.ainvoke({
+                "messages": [{"role": "user", "content": user_message}]
+            })
+
+            # Extract content from last message
+            messages = result.get("messages", [])
+            new_content = ""
+            if messages:
+                last_message = messages[-1]
+                new_content = last_message.content if hasattr(last_message, 'content') else str(last_message)
 
             if not new_content:
                 return {
@@ -783,5 +851,7 @@ This pull request contains updated documentation generated by AutoDoc v2.
             }
 
 
-# Global wiki generation service instance
-wiki_service = WikiGenerationService()
+# Deprecated: Module-level singleton removed
+# Use get_wiki_service() from src.dependencies with FastAPI's Depends() instead
+# from ..dependencies import get_wiki_service
+# wiki_service = get_wiki_service()  # REMOVED - use dependency injection

@@ -4,24 +4,52 @@ This module implements the document processing agent that handles
 repository analysis, file processing, and content preparation for embedding.
 """
 
-import asyncio
+import fnmatch
+import json
 import logging
+import os
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
+from langgraph.graph import END, START, StateGraph
 
-from ..models.code_document import CodeDocument, CodeDocumentCreate
-from ..models.repository import AnalysisStatus, Repository
-from ..tools.embedding_tool import embedding_tool
-from ..tools.repository_tool import repository_tool
+from ..models.repository import AnalysisStatus
+from ..repository.repository_repository import RepositoryRepository
+from ..tools.repository_tool import RepositoryTool
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
+
+# Hardcoded patterns for documentation files to extract
+DOC_FILE_PATTERNS = [
+    # AI assistant instructions
+    "CLAUDE.md",
+    "claude.md",
+    ".claude/CLAUDE.md",
+    "agent.md",
+    "AGENT.md",
+    "llm.txt",
+    "LLM.txt",
+    "copilot-instructions.md",
+    ".github/copilot-instructions.md",
+    # Standard project docs
+    "README.md",
+    "README.txt",
+    "README",
+    "readme.md",
+    "CONTRIBUTING.md",
+    "ARCHITECTURE.md",
+    "CHANGELOG.md",
+    "CODEOWNERS",
+    ".github/CODEOWNERS",
+    # Docs folder (recursive)
+    "docs/**/*.md",
+    "doc/**/*.md",
+]
 
 
 class DocumentProcessingState(TypedDict):
@@ -31,9 +59,16 @@ class DocumentProcessingState(TypedDict):
     repository_url: str
     branch: Optional[str]
     clone_path: Optional[str]
-    discovered_files: List[Dict[str, Any]]
-    processed_documents: List[Dict[str, Any]]
-    embeddings_generated: int
+
+    # New simplified outputs
+    documentation_files: List[Dict[str, str]]  # [{path, content}, ...]
+    file_tree: str  # ASCII tree structure
+
+    # Patterns (loaded from config, possibly overridden by .autodoc/autodoc.json)
+    excluded_dirs: List[str]
+    excluded_files: List[str]
+
+    # Workflow tracking
     current_step: str
     error_message: Optional[str]
     progress: float
@@ -48,125 +83,481 @@ class DocumentProcessingAgent:
     repository cloning to embedding generation and storage.
     """
 
-    def __init__(self):
-        """Initialize document processing agent"""
+    def __init__(
+        self,
+        repository_tool: RepositoryTool,
+        repository_repo: RepositoryRepository,
+    ):
+        """Initialize document processing agent with dependency injection.
+
+        Args:
+            repository_tool: RepositoryTool instance for cloning repos.
+            repository_repo: RepositoryRepository instance for status updates.
+        """
         self.settings = get_settings()
+        self._repository_tool = repository_tool
+        self._repository_repo = repository_repo
         self.workflow = self._create_workflow()
 
-    def _create_workflow(self) -> StateGraph:
-        """Create the document processing workflow graph
+    def _matches_pattern(self, path: str, pattern: str) -> bool:
+        """Check if a path matches a pattern.
+
+        Supports:
+        - Exact matches: "README.md"
+        - Wildcards: "*.min.js"
+        - Glob patterns: "docs/**/*.md"
+        """
+        # Normalize path separators
+        path = path.replace("\\", "/")
+        pattern = pattern.replace("\\", "/")
+
+        # Handle ** glob patterns
+        if "**" in pattern:
+            # Convert glob pattern to regex-like matching
+            parts = pattern.split("**")
+            if len(parts) == 2:
+                prefix, suffix = parts
+                # Check if path starts with prefix (if any) and ends with suffix pattern
+                if prefix and not path.startswith(prefix.rstrip("/")):
+                    return False
+                if suffix:
+                    suffix = suffix.lstrip("/")
+                    # Get the remaining path after prefix
+                    remaining = path[len(prefix.rstrip("/")):].lstrip("/") if prefix else path
+                    return fnmatch.fnmatch(remaining, f"*{suffix}") or fnmatch.fnmatch(path, f"*{suffix}")
+                return True
+
+        # Handle simple wildcard patterns
+        return fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(os.path.basename(path), pattern)
+
+    def _load_exclusion_patterns(self, clone_path: Optional[str]) -> tuple[List[str], List[str]]:
+        """Load exclusion patterns from config and optional .autodoc/autodoc.json override.
+
+        This helper loads patterns internally so nodes don't need to pass patterns
+        through state between workflow steps.
+
+        Args:
+            clone_path: Path to the cloned repository.
 
         Returns:
-            LangGraph StateGraph for document processing
+            Tuple of (excluded_dirs, excluded_files).
         """
-        # Create workflow graph
+        # Start with defaults from config
+        excluded_dirs = list(self.settings.default_excluded_dirs)
+        excluded_files = list(self.settings.default_excluded_files)
+
+        # Check for .autodoc/autodoc.json override
+        if clone_path:
+            autodoc_config_path = Path(clone_path) / ".autodoc" / "autodoc.json"
+            if autodoc_config_path.exists():
+                try:
+                    with open(autodoc_config_path, "r", encoding="utf-8") as f:
+                        autodoc_config = json.load(f)
+
+                    # Override with values from autodoc.json if present
+                    if "excluded_dirs" in autodoc_config:
+                        excluded_dirs = autodoc_config["excluded_dirs"]
+                        logger.info("Loaded excluded_dirs from .autodoc/autodoc.json")
+                    if "excluded_files" in autodoc_config:
+                        excluded_files = autodoc_config["excluded_files"]
+                        logger.info("Loaded excluded_files from .autodoc/autodoc.json")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Invalid .autodoc/autodoc.json: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to read .autodoc/autodoc.json: {e}")
+
+        return excluded_dirs, excluded_files
+
+    def _build_file_tree(
+        self, root_path: str, excluded_dirs: List[str], excluded_files: List[str]
+    ) -> str:
+        """Build ASCII tree representation of directory structure.
+
+        Args:
+            root_path: Root directory to build tree from.
+            excluded_dirs: List of directory patterns to exclude.
+            excluded_files: List of file patterns to exclude.
+
+        Returns:
+            ASCII tree string.
+        """
+        lines = []
+        root = Path(root_path)
+
+        def should_exclude_dir(dir_path: Path) -> bool:
+            rel_path = str(dir_path.relative_to(root)).replace("\\", "/") + "/"
+            dir_name = dir_path.name + "/"
+            for pattern in excluded_dirs:
+                pattern = pattern.replace("\\", "/")
+                # Match against relative path or just directory name
+                if self._matches_pattern(rel_path, pattern) or self._matches_pattern(dir_name, pattern):
+                    return True
+            return False
+
+        def should_exclude_file(file_path: Path) -> bool:
+            rel_path = str(file_path.relative_to(root)).replace("\\", "/")
+            file_name = file_path.name
+            for pattern in excluded_files:
+                if self._matches_pattern(rel_path, pattern) or self._matches_pattern(file_name, pattern):
+                    return True
+            return False
+
+        def add_tree(path: Path, prefix: str = ""):
+            entries = sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
+
+            # Filter entries
+            filtered = []
+            for entry in entries:
+                if entry.is_dir():
+                    if not should_exclude_dir(entry):
+                        filtered.append(entry)
+                else:
+                    if not should_exclude_file(entry):
+                        filtered.append(entry)
+
+            for i, entry in enumerate(filtered):
+                is_last = i == len(filtered) - 1
+                connector = "└── " if is_last else "├── "
+
+                if entry.is_dir():
+                    lines.append(f"{prefix}{connector}{entry.name}/")
+                    extension = "    " if is_last else "│   "
+                    add_tree(entry, prefix + extension)
+                else:
+                    lines.append(f"{prefix}{connector}{entry.name}")
+
+        add_tree(root)
+        return "\n".join(lines)
+
+    def _create_workflow(self) -> StateGraph:
+        """Create the document processing workflow graph.
+
+        Workflow order:
+        1. clone_repository - Clone the repository
+        2. build_tree - Build file tree (loads patterns internally)
+        3. extract_docs - Extract documentation files
+        4. load_patterns - Load patterns into state for cleanup
+        5. cleanup_excluded - Physically delete excluded files/dirs
+
+        Returns:
+            LangGraph StateGraph for document processing.
+        """
         workflow = StateGraph(DocumentProcessingState)
 
         # Add nodes
         workflow.add_node("clone_repository", self._clone_repository_node)
-        workflow.add_node("discover_files", self._discover_files_node)
-        workflow.add_node("process_content", self._process_content_node)
-        workflow.add_node("generate_embeddings", self._generate_embeddings_node)
-        workflow.add_node("store_documents", self._store_documents_node)
-        workflow.add_node("cleanup", self._cleanup_node)
+        workflow.add_node("build_tree", self._discover_and_build_tree_node)
+        workflow.add_node("extract_docs", self._extract_docs_node)
+        workflow.add_node("load_patterns", self._load_patterns_node)
+        workflow.add_node("cleanup_excluded", self._cleanup_excluded_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        # Define workflow edges
-        workflow.set_entry_point("clone_repository")
-
-        # Sequential processing flow
-        workflow.add_edge("clone_repository", "discover_files")
-        workflow.add_edge("discover_files", "process_content")
-        workflow.add_edge("process_content", "generate_embeddings")
-        workflow.add_edge("generate_embeddings", "store_documents")
-        workflow.add_edge("store_documents", "cleanup")
-        workflow.add_edge("cleanup", END)
+        # Define workflow edges - new order
+        workflow.add_edge(START, "clone_repository")
+        workflow.add_edge("clone_repository", "build_tree")
+        workflow.add_edge("build_tree", "extract_docs")
+        workflow.add_edge("extract_docs", "load_patterns")
+        workflow.add_edge("load_patterns", "cleanup_excluded")
+        workflow.add_edge("cleanup_excluded", END)
 
         # Error handling
-        workflow.add_edge("handle_error", "cleanup")
-        app = workflow.compile()
+        workflow.add_edge("handle_error", END)
+
+        app = workflow.compile().with_config(
+            {"run_name": "document_agent.document_processing_workflow"}
+        )
         logger.debug(f"Document processing workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
     async def process_repository(
-        self, repository_id: str, repository_url: str, branch: Optional[str] = None
+        self,
+        repository_id: str,
+        repository_url: str,
+        branch: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Process repository through complete document processing pipeline
+        """Process a repository and return documentation files + tree structure.
 
         Args:
-            repository_id: Repository identifier
-            repository_url: Repository URL to process
-            branch: Specific branch to process
+            repository_id: Unique identifier for the repository.
+            repository_url: URL of the repository to clone.
+            branch: Optional branch to clone (defaults to default branch).
 
         Returns:
-            Dictionary with processing results
+            Dict containing:
+                - clone_path: Path to cloned repository
+                - documentation_files: List of {path, content} dicts
+                - file_tree: ASCII tree string
+                - error_message: Error message if failed
         """
+        initial_state: DocumentProcessingState = {
+            "repository_id": repository_id,
+            "repository_url": repository_url,
+            "branch": branch,
+            "clone_path": None,
+            "documentation_files": [],
+            "file_tree": "",
+            "excluded_dirs": [],
+            "excluded_files": [],
+            "current_step": "initializing",
+            "error_message": None,
+            "progress": 0.0,
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "messages": [HumanMessage(content=f"Processing repository: {repository_url}")],
+        }
+
         try:
-            # Initialize state
-            initial_state: DocumentProcessingState = {
-                "repository_id": repository_id,
-                "repository_url": repository_url,
-                "branch": branch,
-                "clone_path": None,
-                "discovered_files": [],
-                "processed_documents": [],
-                "embeddings_generated": 0,
-                "current_step": "starting",
-                "error_message": None,
-                "progress": 0.0,
-                "start_time": datetime.now(timezone.utc).isoformat(),
-                "messages": [
-                    HumanMessage(content=f"Process repository: {repository_url}")
-                ],
-            }
-
             # Update repository status to processing
-            await self._update_repository_status(
-                repository_id, AnalysisStatus.PROCESSING
-            )
+            await self._update_repository_status(repository_id, AnalysisStatus.PROCESSING)
 
-            # Execute workflow
-            result = await self.workflow.ainvoke(initial_state)
+            # Run the workflow
+            final_state = await self.workflow.ainvoke(initial_state)
 
-            # Update final repository status
-            if result.get("error_message"):
-                await self._update_repository_status(
-                    repository_id,
-                    AnalysisStatus.FAILED,
-                    error_message=result["error_message"],
-                )
-            else:
-                await self._update_repository_status(
-                    repository_id,
-                    AnalysisStatus.COMPLETED,
-                    commit_sha=result.get("commit_sha"),
-                )
+            # Check for errors
+            if final_state.get("error_message"):
+                await self._update_repository_status(repository_id, AnalysisStatus.FAILED)
+                return {
+                    "status": "failed",
+                    "error": final_state["error_message"],
+                    "clone_path": final_state.get("clone_path"),
+                    "documentation_files": [],
+                    "file_tree": "",
+                }
+
+            # Update status to completed
+            await self._update_repository_status(repository_id, AnalysisStatus.COMPLETED)
 
             return {
-                "status": "completed" if not result.get("error_message") else "failed",
-                "repository_id": repository_id,
-                "processed_files": len(result.get("processed_documents", [])),
-                "embeddings_generated": result.get("embeddings_generated", 0),
-                "processing_time": result.get("processing_time", 0),
-                "error_message": result.get("error_message"),
+                "status": "success",
+                "clone_path": final_state["clone_path"],
+                "documentation_files": final_state["documentation_files"],
+                "file_tree": final_state["file_tree"],
             }
 
         except Exception as e:
-            logger.error(
-                f"Document processing failed for repository {repository_id}: {e}"
-            )
-
-            # Update repository status to failed
-            await self._update_repository_status(
-                repository_id, AnalysisStatus.FAILED, error_message=str(e)
-            )
-
+            logger.error(f"Repository processing failed: {e}")
+            await self._update_repository_status(repository_id, AnalysisStatus.FAILED)
             return {
                 "status": "failed",
-                "repository_id": repository_id,
                 "error": str(e),
-                "error_type": type(e).__name__,
+                "clone_path": None,
+                "documentation_files": [],
+                "file_tree": "",
             }
+
+    async def _load_patterns_node(
+        self, state: DocumentProcessingState
+    ) -> DocumentProcessingState:
+        """Load exclusion patterns into state for cleanup step.
+        
+        This node runs after extract_docs and before cleanup_excluded.
+        The patterns are loaded into state for the cleanup node to use.
+        """
+        try:
+            state["current_step"] = "loading_patterns"
+            state["progress"] = 80.0
+
+            # Load patterns using helper
+            excluded_dirs, excluded_files = self._load_exclusion_patterns(state["clone_path"])
+
+            state["excluded_dirs"] = excluded_dirs
+            state["excluded_files"] = excluded_files
+
+            state["messages"].append(
+                AIMessage(content=f"Loaded {len(excluded_dirs)} dir exclusions and {len(excluded_files)} file exclusions for cleanup")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Load patterns node failed: {str(e)}"
+            return state
+
+    async def _discover_and_build_tree_node(
+        self, state: DocumentProcessingState
+    ) -> DocumentProcessingState:
+        """Discover files and build ASCII tree structure.
+        
+        Loads exclusion patterns internally - does not require patterns from state.
+        """
+        try:
+            state["current_step"] = "building_tree"
+            state["progress"] = 25.0
+
+            if not state["clone_path"]:
+                state["error_message"] = "No clone path available for tree building"
+                return state
+
+            # Load patterns internally (not from state)
+            excluded_dirs, excluded_files = self._load_exclusion_patterns(state["clone_path"])
+
+            # Build the file tree
+            file_tree = self._build_file_tree(
+                state["clone_path"],
+                excluded_dirs,
+                excluded_files
+            )
+
+            state["file_tree"] = file_tree
+            state["progress"] = 40.0
+
+            # Count lines for message
+            line_count = len(file_tree.split("\n")) if file_tree else 0
+            state["messages"].append(
+                AIMessage(content=f"Built file tree with {line_count} entries")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Build tree node failed: {str(e)}"
+            return state
+
+    async def _extract_docs_node(
+        self, state: DocumentProcessingState
+    ) -> DocumentProcessingState:
+        """Extract documentation files content."""
+        try:
+            state["current_step"] = "extracting_docs"
+            state["progress"] = 60.0
+
+            if not state["clone_path"]:
+                state["error_message"] = "No clone path available for doc extraction"
+                return state
+
+            root = Path(state["clone_path"])
+            documentation_files = []
+
+            for pattern in DOC_FILE_PATTERNS:
+                if "**" in pattern:
+                    # Glob pattern
+                    for file_path in root.glob(pattern):
+                        if file_path.is_file():
+                            try:
+                                content = file_path.read_text(encoding="utf-8")
+                                rel_path = str(file_path.relative_to(root)).replace("\\", "/")
+                                documentation_files.append({
+                                    "path": rel_path,
+                                    "content": content
+                                })
+                            except Exception as e:
+                                logger.warning(f"Failed to read {file_path}: {e}")
+                else:
+                    # Exact file match
+                    file_path = root / pattern
+                    if file_path.is_file():
+                        try:
+                            content = file_path.read_text(encoding="utf-8")
+                            rel_path = str(file_path.relative_to(root)).replace("\\", "/")
+                            documentation_files.append({
+                                "path": rel_path,
+                                "content": content
+                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to read {file_path}: {e}")
+
+            # Deduplicate by path (case-insensitive for cross-platform compatibility)
+            seen_paths = set()
+            unique_docs = []
+            for doc in documentation_files:
+                path_lower = doc["path"].lower()
+                if path_lower not in seen_paths:
+                    seen_paths.add(path_lower)
+                    unique_docs.append(doc)
+
+            state["documentation_files"] = unique_docs
+            state["progress"] = 80.0
+
+            state["messages"].append(
+                AIMessage(content=f"Extracted {len(unique_docs)} documentation files")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Extract docs node failed: {str(e)}"
+            return state
+
+    async def _cleanup_excluded_node(
+        self, state: DocumentProcessingState
+    ) -> DocumentProcessingState:
+        """Physically delete excluded files and directories from cloned repository.
+        
+        This node runs after load_patterns and uses the patterns from state.
+        The cleanup makes the repo ready for Wiki Agent's file searches.
+        """
+        try:
+            state["current_step"] = "cleanup_excluded"
+            state["progress"] = 90.0
+
+            if not state["clone_path"]:
+                state["error_message"] = "No clone path available for cleanup"
+                return state
+
+            root = Path(state["clone_path"])
+            excluded_dirs = state.get("excluded_dirs", [])
+            excluded_files = state.get("excluded_files", [])
+
+            deleted_dirs = 0
+            deleted_files = 0
+
+            # Helper to check if directory should be excluded
+            def should_exclude_dir(dir_path: Path) -> bool:
+                rel_path = str(dir_path.relative_to(root)).replace("\\", "/") + "/"
+                dir_name = dir_path.name + "/"
+                for pattern in excluded_dirs:
+                    pattern = pattern.replace("\\", "/")
+                    if self._matches_pattern(rel_path, pattern) or self._matches_pattern(dir_name, pattern):
+                        return True
+                return False
+
+            # Helper to check if file should be excluded
+            def should_exclude_file(file_path: Path) -> bool:
+                rel_path = str(file_path.relative_to(root)).replace("\\", "/")
+                file_name = file_path.name
+                for pattern in excluded_files:
+                    if self._matches_pattern(rel_path, pattern) or self._matches_pattern(file_name, pattern):
+                        return True
+                return False
+
+            # Collect directories to delete (deepest first to avoid issues)
+            dirs_to_delete = []
+            for dir_path in root.rglob("*"):
+                if dir_path.is_dir() and should_exclude_dir(dir_path):
+                    dirs_to_delete.append(dir_path)
+
+            # Sort by depth (deepest first)
+            dirs_to_delete.sort(key=lambda p: len(p.parts), reverse=True)
+
+            # Delete directories
+            for dir_path in dirs_to_delete:
+                try:
+                    if dir_path.exists():
+                        shutil.rmtree(dir_path)
+                        deleted_dirs += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete directory {dir_path}: {e}")
+
+            # Collect and delete files
+            for file_path in root.rglob("*"):
+                if file_path.is_file() and should_exclude_file(file_path):
+                    try:
+                        file_path.unlink()
+                        deleted_files += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to delete file {file_path}: {e}")
+
+            state["current_step"] = "success"
+            state["progress"] = 100.0
+
+            state["messages"].append(
+                AIMessage(content=f"Cleanup complete: deleted {deleted_dirs} directories and {deleted_files} files")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Cleanup node failed: {str(e)}"
+            return state
 
     async def _clone_repository_node(
         self, state: DocumentProcessingState
@@ -176,8 +567,7 @@ class DocumentProcessingAgent:
             state["current_step"] = "cloning_repository"
             state["progress"] = 10.0
 
-            # Clone repository using repository tool
-            clone_result = await repository_tool._arun(
+            clone_result = await self._repository_tool._arun(
                 "clone", repository_url=state["repository_url"], branch=state["branch"]
             )
 
@@ -201,234 +591,6 @@ class DocumentProcessingAgent:
 
         except Exception as e:
             state["error_message"] = f"Clone node failed: {str(e)}"
-            return state
-
-    async def _discover_files_node(
-        self, state: DocumentProcessingState
-    ) -> DocumentProcessingState:
-        """Discover files node"""
-        try:
-            state["current_step"] = "discovering_files"
-            state["progress"] = 30.0
-
-            if not state["clone_path"]:
-                state["error_message"] = "No clone path available for file discovery"
-                return state
-
-            # Discover files using repository tool
-            discovery_result = await repository_tool._arun(
-                "discover_files", repository_path=state["clone_path"]
-            )
-
-            if discovery_result["status"] != "success":
-                state["error_message"] = (
-                    f"File discovery failed: {discovery_result.get('error', 'Unknown error')}"
-                )
-                return state
-
-            state["discovered_files"] = discovery_result["discovered_files"]
-            state["progress"] = 40.0
-
-            # Add success message
-            state["messages"].append(
-                AIMessage(
-                    content=f"Discovered {len(state['discovered_files'])} files for processing"
-                )
-            )
-
-            return state
-
-        except Exception as e:
-            state["error_message"] = f"File discovery node failed: {str(e)}"
-            return state
-
-    async def _process_content_node(
-        self, state: DocumentProcessingState
-    ) -> DocumentProcessingState:
-        """Process file content node"""
-        try:
-            state["current_step"] = "processing_content"
-            state["progress"] = 50.0
-
-            if not state["discovered_files"]:
-                state["error_message"] = "No files discovered for processing"
-                return state
-
-            processed_documents = []
-
-            # Process each discovered file
-            for i, file_info in enumerate(state["discovered_files"]):
-                try:
-                    # Read file content
-                    file_path = file_info["full_path"]
-                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        content = f.read()
-
-                    # Process content for embedding
-                    processed_content = self._clean_content_for_embedding(
-                        content, file_info["language"]
-                    )
-
-                    # Create document record
-                    doc_data = {
-                        "id": f"{state['repository_id']}_{file_info['path'].replace('/', '_').replace('.', '_')}",
-                        "repository_id": state["repository_id"],
-                        "file_path": file_info["path"],
-                        "language": file_info["language"],
-                        "content": content,
-                        "processed_content": processed_content,
-                        "metadata": {
-                            "size": file_info["size"],
-                            "modified_at": file_info["modified_at"],
-                            "processing_time": datetime.now(timezone.utc).isoformat(),
-                        },
-                    }
-
-                    processed_documents.append(doc_data)
-
-                    # Update progress
-                    progress = 50.0 + (i / len(state["discovered_files"])) * 20.0
-                    state["progress"] = progress
-
-                except Exception as e:
-                    logger.warning(f"Failed to process file {file_info['path']}: {e}")
-                    continue
-
-            state["processed_documents"] = processed_documents
-            state["progress"] = 70.0
-
-            # Add success message
-            state["messages"].append(
-                AIMessage(
-                    content=f"Processed {len(processed_documents)} files for embedding generation"
-                )
-            )
-
-            return state
-
-        except Exception as e:
-            state["error_message"] = f"Content processing node failed: {str(e)}"
-            return state
-
-    async def _generate_embeddings_node(
-        self, state: DocumentProcessingState
-    ) -> DocumentProcessingState:
-        """Generate embeddings node"""
-        try:
-            state["current_step"] = "generating_embeddings"
-            state["progress"] = 80.0
-
-            if not state["processed_documents"]:
-                state["error_message"] = (
-                    "No processed documents for embedding generation"
-                )
-                return state
-
-            # Generate embeddings using embedding tool
-            embedding_result = await embedding_tool._arun(
-                "generate_and_store", documents=state["processed_documents"]
-            )
-
-            if embedding_result["status"] != "success":
-                state["error_message"] = (
-                    f"Embedding generation failed: {embedding_result.get('error', 'Unknown error')}"
-                )
-                return state
-
-            state["embeddings_generated"] = embedding_result["processed_count"]
-            state["progress"] = 90.0
-
-            # Add success message
-            state["messages"].append(
-                AIMessage(
-                    content=f"Generated embeddings for {state['embeddings_generated']} documents"
-                )
-            )
-
-            return state
-
-        except Exception as e:
-            state["error_message"] = f"Embedding generation node failed: {str(e)}"
-            return state
-
-    async def _store_documents_node(
-        self, state: DocumentProcessingState
-    ) -> DocumentProcessingState:
-        """Store documents node"""
-        try:
-            state["current_step"] = "storing_documents"
-            state["progress"] = 95.0
-
-            if not state["processed_documents"]:
-                state["progress"] = 100.0
-                return state
-
-            # Store documents in MongoDB
-            mongodb = await get_mongodb_adapter()
-            stored_count = 0
-
-            for doc_data in state["processed_documents"]:
-                try:
-                    # Convert to CodeDocument and store
-                    doc_data["repository_id"] = UUID(state["repository_id"])
-                    code_document = CodeDocument(**doc_data)
-
-                    # Store in database
-                    await mongodb.insert_document(
-                        "code_documents", code_document.model_dump()
-                    )
-                    stored_count += 1
-
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to store document {doc_data.get('id')}: {e}"
-                    )
-                    continue
-
-            state["progress"] = 100.0
-
-            # Add success message
-            state["messages"].append(
-                AIMessage(content=f"Stored {stored_count} documents in database")
-            )
-
-            return state
-
-        except Exception as e:
-            state["error_message"] = f"Document storage node failed: {str(e)}"
-            return state
-
-    async def _cleanup_node(
-        self, state: DocumentProcessingState
-    ) -> DocumentProcessingState:
-        """Cleanup node"""
-        try:
-            state["current_step"] = "cleanup"
-
-            # Cleanup cloned repository
-            if state["clone_path"]:
-                cleanup_result = await repository_tool._arun(
-                    "cleanup", repository_path=state["clone_path"]
-                )
-
-                if cleanup_result["status"] == "success":
-                    state["messages"].append(
-                        AIMessage(content="Repository cleanup completed")
-                    )
-
-            # Calculate total processing time
-            start_time = datetime.fromisoformat(state["start_time"])
-            end_time = datetime.now(timezone.utc)
-            processing_time = (end_time - start_time).total_seconds()
-
-            state["processing_time"] = processing_time
-            state["current_step"] = "completed"
-
-            return state
-
-        except Exception as e:
-            logger.error(f"Cleanup node failed: {e}")
-            state["error_message"] = f"Cleanup failed: {str(e)}"
             return state
 
     async def _handle_error_node(
@@ -456,60 +618,6 @@ class DocumentProcessingAgent:
             logger.error(f"Error handling node failed: {e}")
             return state
 
-    def _clean_content_for_embedding(self, content: str, language: str) -> str:
-        """Clean content for embedding generation
-
-        Args:
-            content: Raw file content
-            language: Programming language
-
-        Returns:
-            Cleaned content suitable for embedding
-        """
-        try:
-            # Remove excessive whitespace
-            cleaned = re.sub(r"\s+", " ", content.strip())
-
-            # Language-specific cleaning
-            if language == "python":
-                # Remove docstring quotes but keep content
-                cleaned = re.sub(
-                    r'""".*?"""',
-                    lambda m: m.group(0).replace('"""', ""),
-                    cleaned,
-                    flags=re.DOTALL,
-                )
-                cleaned = re.sub(
-                    r"'''.*?'''",
-                    lambda m: m.group(0).replace("'''", ""),
-                    cleaned,
-                    flags=re.DOTALL,
-                )
-
-            elif language in ["javascript", "typescript"]:
-                # Remove excessive comments but keep meaningful ones
-                cleaned = re.sub(r"//.*?$", "", cleaned, flags=re.MULTILINE)
-                cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
-
-            elif language in ["java", "csharp"]:
-                # Remove comments
-                cleaned = re.sub(r"//.*?$", "", cleaned, flags=re.MULTILINE)
-                cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
-
-            # Remove empty lines and normalize whitespace
-            lines = [line.strip() for line in cleaned.split("\n") if line.strip()]
-            cleaned = "\n".join(lines)
-
-            # Truncate if too long (for embedding efficiency)
-            max_length = 8000  # Reasonable limit for embeddings
-            if len(cleaned) > max_length:
-                cleaned = cleaned[:max_length] + "..."
-
-            return cleaned
-
-        except Exception as e:
-            logger.warning(f"Content cleaning failed: {e}")
-            return content[:8000]  # Fallback to truncated original
 
     async def _update_repository_status(
         self,
@@ -527,7 +635,6 @@ class DocumentProcessingAgent:
             commit_sha: Optional commit SHA
         """
         try:
-            mongodb = await get_mongodb_adapter()
 
             updates = {
                 "analysis_status": status.value,
@@ -542,60 +649,9 @@ class DocumentProcessingAgent:
             if error_message:
                 updates["error_message"] = error_message
 
-            await mongodb.update_document(
-                "repositories", {"id": repository_id}, updates
-            )
+            await self._repository_repo.update(UUID(repository_id), updates)
 
         except Exception as e:
             logger.error(f"Failed to update repository status: {e}")
 
-    async def get_processing_status(self, repository_id: str) -> Dict[str, Any]:
-        """Get current processing status for repository
 
-        Args:
-            repository_id: Repository ID
-
-        Returns:
-            Dictionary with current processing status
-        """
-        try:
-            mongodb = await get_mongodb_adapter()
-
-            # Get repository
-            repository = await mongodb.find_document(
-                "repositories", {"id": repository_id}
-            )
-            if not repository:
-                return {"status": "not_found", "error": "Repository not found"}
-
-            # Get document count
-            doc_count = await mongodb.count_documents(
-                "code_documents", {"repository_id": repository_id}
-            )
-
-            # Get embedding count
-            embedding_count = await mongodb.count_documents(
-                "code_documents",
-                {"repository_id": repository_id, "embedding": {"$exists": True}},
-            )
-
-            return {
-                "status": "success",
-                "repository_id": repository_id,
-                "analysis_status": repository.get("analysis_status", "unknown"),
-                "last_analyzed": repository.get("last_analyzed"),
-                "total_documents": doc_count,
-                "documents_with_embeddings": embedding_count,
-                "embedding_coverage": (
-                    (embedding_count / doc_count * 100) if doc_count > 0 else 0
-                ),
-                "error_message": repository.get("error_message"),
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to get processing status: {e}")
-            return {"status": "error", "error": str(e), "repository_id": repository_id}
-
-
-# Global agent instance
-document_agent = DocumentProcessingAgent()

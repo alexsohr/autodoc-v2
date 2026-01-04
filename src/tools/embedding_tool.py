@@ -18,8 +18,8 @@ from pydantic import BaseModel, Field
 
 from ..models.code_document import CodeDocument
 from ..models.config import LLMProvider
+from ..repository.code_document_repository import CodeDocumentRepository
 from ..utils.config_loader import get_settings
-from ..utils.mongodb_adapter import get_mongodb_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -68,15 +68,23 @@ class EmbeddingTool(BaseTool):
     name: str = "embedding_tool"
     description: str = "Tool for generating, storing, and searching vector embeddings"
 
-    def __init__(self):
+    def __init__(self, code_document_repo: CodeDocumentRepository):
+        """Initialize EmbeddingTool with dependency injection.
+        
+        Args:
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+        """
         super().__init__()
         # Initialize settings and configuration
-        settings = get_settings()
-        self._batch_size = settings.embedding_batch_size
+        self._settings = get_settings()
+        self._batch_size = self._settings.embedding_batch_size
 
-        # Initialize embedding providers
-        self._embedding_providers = {}
-        self._setup_embedding_providers(settings)
+        # Lazy initialization - providers created on first use
+        self._embedding_providers: Dict = {}
+        self._providers_initialized = False
+
+        # Repository injected via DI
+        self._code_document_repo = code_document_repo
 
     def _setup_embedding_providers(self, settings) -> None:
         """Setup embedding providers based on configuration"""
@@ -216,16 +224,12 @@ class EmbeddingTool(BaseTool):
             Dictionary with storage results
         """
         try:
-            # Get MongoDB adapter
-            mongodb = await get_mongodb_adapter()
-
             # Store embedding
-            await mongodb.store_document_embedding(document_id, embedding)
+            await self._code_document_repo.store_embedding(document_id, embedding)
 
             # Store additional metadata if provided
             if metadata:
-                await mongodb.update_document(
-                    "code_documents",
+                await self._code_document_repo.update_one(
                     {"id": document_id},
                     {"embedding_metadata": metadata},
                 )
@@ -267,15 +271,12 @@ class EmbeddingTool(BaseTool):
             Dictionary with search results
         """
         try:
-            # Get MongoDB adapter
-            mongodb = await get_mongodb_adapter()
-
-            # Perform vector search
             from uuid import UUID
 
+            # Perform vector search
             repo_uuid = UUID(repository_id) if repository_id else None
 
-            results = await mongodb.vector_search(
+            results = await self._code_document_repo.vector_search(
                 query_embedding=query_embedding,
                 repository_id=repo_uuid,
                 language_filter=language_filter,
@@ -408,7 +409,7 @@ class EmbeddingTool(BaseTool):
             }
 
     def _get_embedding_provider(self, provider: Optional[str] = None):
-        """Get embedding provider instance
+        """Get embedding provider instance (lazy initialization)
 
         Args:
             provider: Provider name (defaults to first available)
@@ -416,6 +417,11 @@ class EmbeddingTool(BaseTool):
         Returns:
             Embedding provider instance or None
         """
+        # Lazy initialize providers on first access
+        if not self._providers_initialized:
+            self._setup_embedding_providers(self._settings)
+            self._providers_initialized = True
+
         if provider:
             return self._embedding_providers.get(LLMProvider(provider))
 
@@ -578,16 +584,13 @@ class EmbeddingTool(BaseTool):
             Dictionary with reprocessing results
         """
         try:
-            # Get MongoDB adapter
-            mongodb = await get_mongodb_adapter()
-
             # Find all documents for repository
             query = {"repository_id": repository_id}
             if not force:
                 # Only process documents without embeddings
                 query["embedding"] = {"$exists": False}
 
-            documents = await mongodb.find_documents("code_documents", query)
+            documents = await self._code_document_repo.find_many(query)
 
             if not documents:
                 return {
@@ -601,10 +604,13 @@ class EmbeddingTool(BaseTool):
             code_documents = []
             for doc in documents:
                 try:
-                    from uuid import UUID
+                    if isinstance(doc, CodeDocument):
+                        code_documents.append(doc)
+                    else:
+                        from uuid import UUID
 
-                    doc["repository_id"] = UUID(doc["repository_id"])
-                    code_documents.append(CodeDocument(**doc))
+                        doc["repository_id"] = UUID(doc["repository_id"])
+                        code_documents.append(CodeDocument(**doc))
                 except Exception as e:
                     logger.warning(f"Could not convert document {doc.get('id')}: {e}")
 
@@ -639,24 +645,20 @@ class EmbeddingTool(BaseTool):
             Dictionary with embedding statistics
         """
         try:
-            mongodb = await get_mongodb_adapter()
-
             # Build query
             query = {}
             if repository_id:
                 query["repository_id"] = repository_id
 
             # Count total documents
-            total_docs = await mongodb.count_documents("code_documents", query)
+            total_docs = await self._code_document_repo.count(query)
 
             # Count documents with embeddings
             query_with_embedding = {
                 **query,
                 "embedding": {"$exists": True, "$ne": None},
             }
-            docs_with_embeddings = await mongodb.count_documents(
-                "code_documents", query_with_embedding
-            )
+            docs_with_embeddings = await self._code_document_repo.count(query_with_embedding)
 
             # Get language breakdown
             pipeline = [
@@ -671,8 +673,7 @@ class EmbeddingTool(BaseTool):
             ]
 
             language_stats = {}
-            collection = mongodb.get_collection("code_documents")
-            async for doc in collection.aggregate(pipeline):
+            async for doc in code_document_repo.collection.aggregate(pipeline):
                 language_stats[doc["_id"]] = {
                     "count": doc["count"],
                     "avg_dimension": int(doc.get("avg_embedding_size", 0)),
@@ -700,6 +701,11 @@ class EmbeddingTool(BaseTool):
         Returns:
             List of available provider names
         """
+        # Ensure providers are initialized
+        if not self._providers_initialized:
+            self._setup_embedding_providers(self._settings)
+            self._providers_initialized = True
+            
         return [provider.value for provider in self._embedding_providers.keys()]
 
     def get_provider_info(self, provider: Optional[str] = None) -> Dict[str, Any]:
@@ -731,4 +737,6 @@ class EmbeddingTool(BaseTool):
 
 
 # Tool instance for LangGraph
-embedding_tool = EmbeddingTool()
+# Deprecated: Module-level singleton removed
+# Use get_embedding_tool() from src.dependencies with FastAPI's Depends() instead
+# embedding_tool = EmbeddingTool()  # REMOVED - use dependency injection

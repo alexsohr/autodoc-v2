@@ -13,16 +13,23 @@ from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, StateGraph
 
-from ..agents.document_agent import DocumentProcessingAgent, document_agent
-from ..agents.wiki_agent import WikiGenerationAgent, wiki_agent
 from ..models.repository import AnalysisStatus, Repository
-from ..tools.context_tool import context_tool
-from ..tools.embedding_tool import embedding_tool
-from ..tools.llm_tool import llm_tool
-from ..tools.repository_tool import repository_tool
-from ..utils.mongodb_adapter import get_mongodb_adapter
+from ..repository.code_document_repository import CodeDocumentRepository
+from ..repository.repository_repository import RepositoryRepository
+from ..repository.wiki_structure_repository import WikiStructureRepository
+from ..tools.context_tool import ContextTool
+from ..tools.embedding_tool import EmbeddingTool
+from ..tools.llm_tool import LLMTool
+from ..tools.repository_tool import RepositoryTool
+
+# Import TYPE_CHECKING to avoid circular imports
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..agents.document_agent import DocumentProcessingAgent
+    from ..agents.wiki_agent import WikiGenerationAgent
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +68,48 @@ class WorkflowOrchestrator:
     document processing, wiki generation, and chat responses.
     """
 
-    def __init__(self):
-        """Initialize workflow orchestrator"""
+    def __init__(
+        self,
+        context_tool: ContextTool,
+        embedding_tool: EmbeddingTool,
+        llm_tool: LLMTool,
+        repository_tool: RepositoryTool,
+        repository_repo: RepositoryRepository,
+        code_document_repo: CodeDocumentRepository,
+        wiki_structure_repo: WikiStructureRepository,
+        document_agent: "DocumentProcessingAgent",
+        wiki_agent: "WikiGenerationAgent",
+    ):
+        """Initialize workflow orchestrator with dependency injection.
+        
+        Args:
+            context_tool: ContextTool instance (injected via DI).
+            embedding_tool: EmbeddingTool instance (injected via DI).
+            llm_tool: LLMTool instance (injected via DI).
+            repository_tool: RepositoryTool instance (injected via DI).
+            repository_repo: RepositoryRepository instance (injected via DI).
+            code_document_repo: CodeDocumentRepository instance (injected via DI).
+            wiki_structure_repo: WikiStructureRepository instance (injected via DI).
+            document_agent: DocumentProcessingAgent instance (injected via DI).
+            wiki_agent: WikiGenerationAgent instance (injected via DI).
+        """
         self.memory = MemorySaver()
+        
+        # Tool dependencies
+        self._context_tool = context_tool
+        self._embedding_tool = embedding_tool
+        self._llm_tool = llm_tool
+        self._repository_tool = repository_tool
+        
+        # Repository dependencies
+        self._repository_repo = repository_repo
+        self._code_document_repo = code_document_repo
+        self._wiki_structure_repo = wiki_structure_repo
+        
+        # Agent dependencies
+        self._document_agent = document_agent
+        self._wiki_agent = wiki_agent
+        
         self.workflows = self._create_workflows()
 
         # Workflow stage definitions
@@ -140,14 +186,14 @@ class WorkflowOrchestrator:
         workflow.add_node("handle_error", self._handle_error_node)
 
         # Define edges
-        workflow.set_entry_point("validate_repository")
+        workflow.add_edge(START, "validate_repository")
         workflow.add_edge("validate_repository", "process_documents")
         workflow.add_edge("process_documents", "generate_wiki")
         workflow.add_edge("generate_wiki", "finalize")
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.full_analysis_workflow"})
         logger.debug(f"Full analysis workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
@@ -160,14 +206,16 @@ class WorkflowOrchestrator:
         workflow.add_node("finalize", self._finalize_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        workflow.set_entry_point("validate_repository")
+        workflow.add_edge(START, "validate_repository")
         workflow.add_edge("validate_repository", "process_documents")
         workflow.add_edge("process_documents", "finalize")
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
-        logger.debug(f"Document processing workflow:\n {app.get_graph().draw_mermaid()}")
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.document_processing_workflow"})
+        logger.debug(
+            f"Document processing workflow:\n {app.get_graph().draw_mermaid()}"
+        )
         return app
 
     def _create_wiki_generation_workflow(self) -> StateGraph:
@@ -179,13 +227,13 @@ class WorkflowOrchestrator:
         workflow.add_node("finalize", self._finalize_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        workflow.set_entry_point("validate_repository")
+        workflow.add_edge(START, "validate_repository")
         workflow.add_edge("validate_repository", "generate_wiki")
         workflow.add_edge("generate_wiki", "finalize")
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.wiki_generation_workflow"})
         logger.debug(f"Wiki generation workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
@@ -201,14 +249,14 @@ class WorkflowOrchestrator:
         workflow.add_node("finalize", self._finalize_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        workflow.set_entry_point("detect_changes")
+        workflow.add_edge(START, "detect_changes")
         workflow.add_edge("detect_changes", "process_changed_documents")
         workflow.add_edge("process_changed_documents", "update_wiki")
         workflow.add_edge("update_wiki", "finalize")
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.incremental_update_workflow"})
         logger.debug(f"Incremental update workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
@@ -221,13 +269,13 @@ class WorkflowOrchestrator:
         workflow.add_node("finalize", self._finalize_node)
         workflow.add_node("handle_error", self._handle_error_node)
 
-        workflow.set_entry_point("retrieve_context")
+        workflow.add_edge(START, "retrieve_context")
         workflow.add_edge("retrieve_context", "generate_response")
         workflow.add_edge("generate_response", "finalize")
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory)
+        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.chat_response_workflow"})
         logger.debug(f"Chat response workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
@@ -317,28 +365,26 @@ class WorkflowOrchestrator:
             state["progress"] = 5.0
 
             # Get repository from database
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.find_document(
-                "repositories", {"id": state["repository_id"]}
-            )
+            repo_repository = self._repository_repo
+            repository = await repo_repository.get(UUID(state["repository_id"]))
 
             if not repository:
                 state["error_message"] = "Repository not found"
                 return state
 
             # Check if repository is accessible
-            if not repository.get("url"):
+            if not repository.url:
                 state["error_message"] = "Repository URL not available"
                 return state
 
-            state["repository_url"] = repository["url"]
+            state["repository_url"] = repository.url
             state["stages_completed"].append("validate_repository")
             state["progress"] = 10.0
 
             # Add success message
             state["messages"].append(
                 AIMessage(
-                    content=f"Repository validated: {repository['org']}/{repository['name']}"
+                    content=f"Repository validated: {repository.org}/{repository.name}"
                 )
             )
 
@@ -356,9 +402,8 @@ class WorkflowOrchestrator:
 
             # Check if documents already processed (unless force update)
             if not state["force_update"]:
-                mongodb = await get_mongodb_adapter()
-                doc_count = await mongodb.count_documents(
-                    "code_documents", {"repository_id": state["repository_id"]}
+                doc_count = await self._code_document_repo.count(
+                    {"repository_id": state["repository_id"]}
                 )
 
                 if doc_count > 0:
@@ -375,26 +420,42 @@ class WorkflowOrchestrator:
                     return state
 
             # Process documents using document agent
-            processing_result = await document_agent.process_repository(
+            processing_result = await self._document_agent.process_repository(
                 repository_id=state["repository_id"],
                 repository_url=state["repository_url"],
                 branch=state["branch"],
             )
 
-            if processing_result["status"] != "completed":
+            if processing_result["status"] != "success":
                 state["error_message"] = (
                     f"Document processing failed: {processing_result.get('error_message', 'Unknown error')}"
                 )
                 return state
 
+            # Store clone_path in Repository
+            if processing_result.get("clone_path"):
+                await self._repository_repo.update(
+                    UUID(state["repository_id"]),
+                    {"clone_path": processing_result["clone_path"]}
+                )
+
+            # Format documentation files for wiki agent
+            doc_files = processing_result.get("documentation_files", [])
+            readme_content = self._format_documentation_files(doc_files)
+
             state["stages_completed"].append("process_documents")
             state["progress"] = 60.0
-            state["results"]["document_processing"] = processing_result
+            state["results"]["document_processing"] = {
+                "file_tree": processing_result.get("file_tree", ""),
+                "readme_content": readme_content,
+                "clone_path": processing_result.get("clone_path"),
+                "documentation_files_count": len(doc_files),
+            }
 
             # Add success message
             state["messages"].append(
                 AIMessage(
-                    content=f"Processed {processing_result['processed_files']} documents with {processing_result['embeddings_generated']} embeddings"
+                    content=f"Processed repository with {len(doc_files)} documentation files"
                 )
             )
 
@@ -412,9 +473,8 @@ class WorkflowOrchestrator:
 
             # Check if wiki already exists (unless force update)
             if not state["force_update"]:
-                mongodb = await get_mongodb_adapter()
-                existing_wiki = await mongodb.find_document(
-                    "wiki_structures", {"repository_id": state["repository_id"]}
+                existing_wiki = await self._wiki_structure_repo.find_one(
+                    {"repository_id": state["repository_id"]}
                 )
 
                 if existing_wiki:
@@ -422,7 +482,7 @@ class WorkflowOrchestrator:
                     state["progress"] = 90.0
                     state["results"]["wiki_generation"] = {
                         "status": "exists",
-                        "wiki_id": existing_wiki.get("id"),
+                        "id": str(existing_wiki.id),
                     }
 
                     state["messages"].append(
@@ -431,9 +491,16 @@ class WorkflowOrchestrator:
 
                     return state
 
-            # Generate wiki using wiki agent
-            wiki_result = await wiki_agent.generate_wiki(
+            # Extract data from document processing results
+            doc_result = state["results"].get("document_processing", {})
+            file_tree = doc_result.get("file_tree", "")
+            readme_content = doc_result.get("readme_content", "")
+
+            # Generate wiki using wiki agent with pre-processed data
+            wiki_result = await self._wiki_agent.generate_wiki(
                 repository_id=state["repository_id"],
+                file_tree=file_tree,
+                readme_content=readme_content,
                 force_regenerate=state["force_update"],
             )
 
@@ -531,7 +598,7 @@ class WorkflowOrchestrator:
                 return state
 
             # Retrieve relevant context
-            context_result = await context_tool._arun(
+            context_result = await self._context_tool._arun(
                 "hybrid_search",
                 query=question,
                 repository_id=state["repository_id"],
@@ -564,7 +631,7 @@ class WorkflowOrchestrator:
             context_documents = state["results"].get("context", [])
 
             # Generate answer using LLM tool
-            answer_result = await llm_tool._arun(
+            answer_result = await self._llm_tool._arun(
                 "answer_question",
                 question=question,
                 context_documents=context_documents,
@@ -678,7 +745,6 @@ class WorkflowOrchestrator:
             error_message: Optional error message
         """
         try:
-            mongodb = await get_mongodb_adapter()
 
             updates = {
                 "analysis_status": status.value,
@@ -691,9 +757,7 @@ class WorkflowOrchestrator:
             if error_message:
                 updates["error_message"] = error_message
 
-            await mongodb.update_document(
-                "repositories", {"id": repository_id}, updates
-            )
+            await self._repository_repo.update(UUID(repository_id), updates)
 
         except Exception as e:
             logger.error(f"Failed to update repository status: {e}")
@@ -719,10 +783,7 @@ class WorkflowOrchestrator:
             # This would retrieve state from checkpointer if workflow is running
             # For now, return basic status
 
-            mongodb = await get_mongodb_adapter()
-            repository = await mongodb.find_document(
-                "repositories", {"id": repository_id}
-            )
+            repository = await self._repository_repo.get(UUID(repository_id))
 
             if not repository:
                 return {
@@ -732,11 +793,12 @@ class WorkflowOrchestrator:
 
             # Determine status based on workflow type
             if workflow_type == WorkflowType.FULL_ANALYSIS:
-                doc_count = await mongodb.count_documents(
-                    "code_documents", {"repository_id": repository_id}
+
+                doc_count = await self._code_document_repo.count(
+                    {"repository_id": repository_id}
                 )
-                wiki_exists = await mongodb.find_document(
-                    "wiki_structures", {"repository_id": repository_id}
+                wiki_exists = await self._wiki_structure_repo.find_one(
+                    {"repository_id": repository_id}
                 )
 
                 if doc_count > 0 and wiki_exists:
@@ -747,14 +809,14 @@ class WorkflowOrchestrator:
                     status = "not_started"
 
             elif workflow_type == WorkflowType.DOCUMENT_PROCESSING:
-                doc_count = await mongodb.count_documents(
-                    "code_documents", {"repository_id": repository_id}
+                doc_count = await self._code_document_repo.count(
+                    {"repository_id": repository_id}
                 )
                 status = "completed" if doc_count > 0 else "not_started"
 
             elif workflow_type == WorkflowType.WIKI_GENERATION:
-                wiki_exists = await mongodb.find_document(
-                    "wiki_structures", {"repository_id": repository_id}
+                wiki_exists = await self._wiki_structure_repo.find_one(
+                    {"repository_id": repository_id}
                 )
                 status = "completed" if wiki_exists else "not_started"
 
@@ -765,8 +827,8 @@ class WorkflowOrchestrator:
                 "status": status,
                 "workflow_type": workflow_type.value,
                 "repository_id": repository_id,
-                "analysis_status": repository.get("analysis_status", "unknown"),
-                "last_analyzed": repository.get("last_analyzed"),
+                "analysis_status": repository.analysis_status.value if repository.analysis_status else "unknown",
+                "last_analyzed": repository.last_analyzed,
             }
 
         except Exception as e:
@@ -819,6 +881,22 @@ class WorkflowOrchestrator:
 
         return descriptions.get(workflow_type, "Unknown workflow")
 
+    def _format_documentation_files(self, doc_files: List[Dict[str, str]]) -> str:
+        """Format documentation files into a single string with citations.
 
-# Global orchestrator instance
-workflow_orchestrator = WorkflowOrchestrator()
+        Args:
+            doc_files: List of dicts with 'path' and 'content' keys.
+
+        Returns:
+            Formatted string with file citations.
+        """
+        if not doc_files:
+            return ""
+
+        parts = []
+        for doc in doc_files:
+            path = doc.get("path", "unknown")
+            content = doc.get("content", "")
+            parts.append(f"--- {path} ---\n{content}")
+
+        return "\n\n".join(parts)

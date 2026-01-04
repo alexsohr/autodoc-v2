@@ -7,12 +7,13 @@ Includes webhook configuration fields and validation rules.
 import re
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
-from .base import BaseSerializers
+from .base import BaseDocument, BaseSerializers
 
 
 class RepositoryProvider(str, Enum):
@@ -39,7 +40,7 @@ class AnalysisStatus(str, Enum):
     FAILED = "failed"
 
 
-class Repository(BaseSerializers):
+class Repository(BaseDocument):
     """Repository model with webhook fields
 
     Represents a source code repository being analyzed by AutoDoc.
@@ -64,6 +65,9 @@ class Repository(BaseSerializers):
     )
     commit_sha: Optional[str] = Field(
         default=None, description="Last analyzed commit SHA"
+    )
+    clone_path: Optional[str] = Field(
+        default=None, description="Local path where repository was cloned"
     )
 
     # Webhook configuration fields
@@ -90,10 +94,29 @@ class Repository(BaseSerializers):
         description="Last update timestamp",
     )
 
+    class Settings:
+        name = "repositories"
+        indexes = [
+            IndexModel("url", unique=True),
+            IndexModel(
+                [("provider", ASCENDING), ("org", ASCENDING), ("name", ASCENDING)]
+            ),
+            IndexModel("analysis_status"),
+            IndexModel([("last_analyzed", DESCENDING)]),
+            IndexModel("webhook_configured"),
+            IndexModel([("created_at", DESCENDING)]),
+        ]
+
     model_config = ConfigDict(
         validate_assignment=True,
-        use_enum_values=True
+        use_enum_values=True,
     )
+
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs: Any) -> "Repository":
+        instance = super().model_validate(obj, **kwargs)
+        instance.ensure_webhook_configuration()
+        return instance
 
     @field_validator("url")
     @classmethod
@@ -166,16 +189,6 @@ class Repository(BaseSerializers):
         return v
 
     @model_validator(mode="after")
-    def validate_webhook_configuration(self) -> "Repository":
-        """Validate webhook configuration consistency"""
-        if self.webhook_configured and not self.webhook_secret:
-            raise ValueError(
-                "Webhook secret must be provided when webhook is configured"
-            )
-
-        return self
-
-    @model_validator(mode="after")
     def validate_provider_url_consistency(self) -> "Repository":
         """Validate provider matches URL domain"""
         if not self.url:
@@ -240,10 +253,16 @@ class Repository(BaseSerializers):
 
     def configure_webhook(self, secret: str, events: List[str]) -> None:
         """Configure webhook settings"""
-        self.webhook_configured = True
         self.webhook_secret = secret
         self.subscribed_events = events
+        self.webhook_configured = True
         self.updated_at = datetime.now(timezone.utc)
+
+    def ensure_webhook_configuration(self) -> None:
+        if self.webhook_configured and not self.webhook_secret:
+            raise ValueError(
+                "Webhook secret must be provided when webhook is configured"
+            )
 
     def record_webhook_event(self) -> None:
         """Record webhook event timestamp"""
@@ -298,14 +317,27 @@ class RepositoryUpdate(BaseModel):
     )
 
 
+class AnalysisRequest(BaseModel):
+    """Request model for triggering repository analysis"""
+
+    force: bool = Field(
+        default=False,
+        description="Force re-analysis even if repository is already analyzed or in progress",
+    )
+    branch: Optional[str] = Field(
+        default=None,
+        description="Specific branch to analyze. If not provided, uses the default branch",
+    )
+
+
 class RepositoryResponse(Repository):
     """Repository response model for API responses"""
-    
+
     # Override webhook_secret to exclude it from serialization (write-only behavior)
     webhook_secret: Optional[str] = Field(
-        default=None, 
+        default=None,
         description="Secret for validating webhook signatures",
-        exclude=True  # Excludes from serialization, equivalent to write_only in V1
+        exclude=True,  # Excludes from serialization, equivalent to write_only in V1
     )
 
 

@@ -7,9 +7,12 @@ WikiStructure, WikiPageDetail, and WikiSection based on data-model.md.
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pymongo import TEXT, IndexModel
+
+from .base import BaseDocument
 
 
 class PageImportance(str, Enum):
@@ -44,10 +47,7 @@ class WikiPageDetail(BaseModel):
     # Content
     content: str = Field(default="", description="Generated markdown content")
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        use_enum_values=True
-    )
+    model_config = ConfigDict(validate_assignment=True, use_enum_values=True)
 
     @field_validator("id")
     @classmethod
@@ -81,27 +81,6 @@ class WikiPageDetail(BaseModel):
         if not v or not v.strip():
             raise ValueError("Page description cannot be empty")
         return v.strip()
-
-    @field_validator("file_paths")
-    @classmethod
-    def validate_file_paths(cls, v: List[str]) -> List[str]:
-        """Validate file paths are relative and valid"""
-        if not v:
-            return v
-
-        validated_paths = []
-        for path in v:
-            if not path or not path.strip():
-                continue
-
-            # Normalize path separators and ensure relative
-            normalized_path = path.strip().replace("\\", "/")
-            if normalized_path.startswith("/") or ".." in normalized_path:
-                raise ValueError(f"File path must be relative: {path}")
-
-            validated_paths.append(normalized_path)
-
-        return validated_paths
 
     @field_validator("related_pages")
     @classmethod
@@ -157,25 +136,21 @@ class WikiPageDetail(BaseModel):
 
 
 class WikiSection(BaseModel):
-    """Organizational section containing pages and subsections
+    """Organizational section containing pages
 
-    Represents a section in the wiki structure that can contain
-    pages and nested subsections for hierarchical organization.
+    Represents a section in the wiki structure that contains pages.
     """
 
     # Core identification
     id: str = Field(description="Unique section identifier")
     title: str = Field(description="Section title")
 
-    # Structure
-    pages: List[str] = Field(
-        default_factory=list, description="Page IDs in this section"
+    # Structure - pages are now embedded as full objects
+    pages: List[WikiPageDetail] = Field(
+        default_factory=list, description="Pages in this section"
     )
-    subsections: List[str] = Field(default_factory=list, description="Subsection IDs")
 
-    model_config = ConfigDict(
-        validate_assignment=True
-    )
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("id")
     @classmethod
@@ -202,117 +177,63 @@ class WikiSection(BaseModel):
             raise ValueError("Section title cannot be empty")
         return v.strip()
 
-    @field_validator("pages")
-    @classmethod
-    def validate_pages(cls, v: List[str]) -> List[str]:
-        """Validate page IDs"""
-        if not v:
-            return v
-
-        validated_pages = []
-        for page_id in v:
-            if not page_id or not page_id.strip():
-                continue
-
-            import re
-
-            if not re.match(r"^[a-zA-Z0-9\-_]+$", page_id.strip()):
-                raise ValueError(f"Page ID must be valid: {page_id}")
-
-            validated_pages.append(page_id.strip())
-
-        return validated_pages
-
-    @field_validator("subsections")
-    @classmethod
-    def validate_subsections(cls, v: List[str]) -> List[str]:
-        """Validate subsection IDs"""
-        if not v:
-            return v
-
-        validated_subsections = []
-        for section_id in v:
-            if not section_id or not section_id.strip():
-                continue
-
-            import re
-
-            if not re.match(r"^[a-zA-Z0-9\-_]+$", section_id.strip()):
-                raise ValueError(f"Subsection ID must be valid: {section_id}")
-
-            validated_subsections.append(section_id.strip())
-
-        return validated_subsections
-
-    def add_page(self, page_id: str) -> None:
+    def add_page(self, page: WikiPageDetail) -> None:
         """Add a page to this section"""
-        if page_id and page_id not in self.pages:
-            self.pages.append(page_id)
-
-    def add_subsection(self, section_id: str) -> None:
-        """Add a subsection to this section"""
-        if section_id and section_id not in self.subsections:
-            self.subsections.append(section_id)
+        if page and page.id not in [p.id for p in self.pages]:
+            self.pages.append(page)
 
     def remove_page(self, page_id: str) -> None:
-        """Remove a page from this section"""
-        if page_id in self.pages:
-            self.pages.remove(page_id)
+        """Remove a page from this section by ID"""
+        self.pages = [p for p in self.pages if p.id != page_id]
 
-    def remove_subsection(self, section_id: str) -> None:
-        """Remove a subsection from this section"""
-        if section_id in self.subsections:
-            self.subsections.remove(section_id)
+    def get_page(self, page_id: str) -> Optional[WikiPageDetail]:
+        """Get a page by ID"""
+        for page in self.pages:
+            if page.id == page_id:
+                return page
+        return None
 
     def has_pages(self) -> bool:
         """Check if section has pages"""
         return len(self.pages) > 0
 
-    def has_subsections(self) -> bool:
-        """Check if section has subsections"""
-        return len(self.subsections) > 0
+    def get_total_pages(self) -> int:
+        """Get total number of pages in this section"""
+        return len(self.pages)
 
     def __str__(self) -> str:
-        return f"{self.title} ({len(self.pages)} pages, {len(self.subsections)} subsections)"
+        return f"{self.title} ({len(self.pages)} pages)"
 
     def __repr__(self) -> str:
         return f"WikiSection(id={self.id}, title={self.title})"
 
 
-class WikiStructure(BaseModel):
+class WikiStructure(BaseDocument):
     """Complete wiki structure for a repository
 
-    Represents the complete wiki structure including all pages,
-    sections, and their hierarchical relationships.
+    Represents the complete wiki structure including all sections
+    with their embedded pages.
     """
 
-    # Core identification
-    id: str = Field(description="Unique wiki identifier")
+    # Core identification - uses UUID pattern like all other collections
+    id: UUID = Field(default_factory=uuid4, description="Unique wiki identifier")
+    repository_id: UUID = Field(description="Repository identifier")
     title: str = Field(description="Wiki title")
     description: str = Field(description="Wiki description")
 
-    # Structure components
-    pages: List[WikiPageDetail] = Field(
-        default_factory=list, description="All wiki pages"
-    )
+    # Structure components - pages are now embedded within sections
     sections: List[WikiSection] = Field(
-        default_factory=list, description="All wiki sections"
-    )
-    root_sections: List[str] = Field(
-        default_factory=list, description="Top-level section IDs"
+        default_factory=list, description="All wiki sections with embedded pages"
     )
 
-    model_config = ConfigDict(
-        validate_assignment=True
-    )
+    class Settings:
+        name = "wiki_structures"
+        indexes = [
+            IndexModel("repository_id", unique=True),
+            IndexModel([("title", TEXT), ("description", TEXT)]),
+        ]
 
-    @field_validator("id")
-    @classmethod
-    def validate_id(cls, v: str) -> str:
-        """Validate wiki ID format"""
-        if not v or not v.strip():
-            raise ValueError("Wiki ID cannot be empty")
-        return v.strip()
+    model_config = ConfigDict(validate_assignment=True)
 
     @field_validator("title")
     @classmethod
@@ -333,51 +254,24 @@ class WikiStructure(BaseModel):
     @model_validator(mode="after")
     def validate_structure_consistency(self) -> "WikiStructure":
         """Validate wiki structure consistency"""
-        # Collect all page and section IDs
-        page_ids = {page.id for page in self.pages}
-        section_ids = {section.id for section in self.sections}
-
-        # Validate root sections exist
-        for root_section_id in self.root_sections:
-            if root_section_id not in section_ids:
-                raise ValueError(
-                    f"Root section '{root_section_id}' not found in sections"
-                )
-
-        # Validate section references
+        # Collect all page IDs across all sections
+        all_page_ids = set()
         for section in self.sections:
-            # Check page references
-            for page_id in section.pages:
-                if page_id not in page_ids:
-                    raise ValueError(
-                        f"Page '{page_id}' referenced in section '{section.id}' not found"
-                    )
-
-            # Check subsection references
-            for subsection_id in section.subsections:
-                if subsection_id not in section_ids:
-                    raise ValueError(
-                        f"Subsection '{subsection_id}' referenced in section '{section.id}' not found"
-                    )
+            for page in section.pages:
+                if page.id in all_page_ids:
+                    raise ValueError(f"Duplicate page ID '{page.id}' found in sections")
+                all_page_ids.add(page.id)
 
         # Validate page related_pages references
-        for page in self.pages:
-            for related_page_id in page.related_pages:
-                if related_page_id not in page_ids:
-                    raise ValueError(
-                        f"Related page '{related_page_id}' for page '{page.id}' not found"
-                    )
+        for section in self.sections:
+            for page in section.pages:
+                for related_page_id in page.related_pages:
+                    if related_page_id not in all_page_ids:
+                        raise ValueError(
+                            f"Related page '{related_page_id}' for page '{page.id}' not found"
+                        )
 
         return self
-
-    def add_page(self, page: WikiPageDetail) -> None:
-        """Add a page to the wiki"""
-        # Check for duplicate IDs
-        existing_ids = {p.id for p in self.pages}
-        if page.id in existing_ids:
-            raise ValueError(f"Page with ID '{page.id}' already exists")
-
-        self.pages.append(page)
 
     def add_section(self, section: WikiSection) -> None:
         """Add a section to the wiki"""
@@ -388,13 +282,6 @@ class WikiStructure(BaseModel):
 
         self.sections.append(section)
 
-    def get_page(self, page_id: str) -> Optional[WikiPageDetail]:
-        """Get a page by ID"""
-        for page in self.pages:
-            if page.id == page_id:
-                return page
-        return None
-
     def get_section(self, section_id: str) -> Optional[WikiSection]:
         """Get a section by ID"""
         for section in self.sections:
@@ -402,29 +289,24 @@ class WikiStructure(BaseModel):
                 return section
         return None
 
-    def get_pages_in_section(self, section_id: str) -> List[WikiPageDetail]:
-        """Get all pages in a specific section"""
-        section = self.get_section(section_id)
-        if not section:
-            return []
+    def get_page(self, page_id: str) -> Optional[WikiPageDetail]:
+        """Get a page by ID from any section"""
+        for section in self.sections:
+            page = section.get_page(page_id)
+            if page:
+                return page
+        return None
 
-        return [page for page in self.pages if page.id in section.pages]
-
-    def get_subsections(self, section_id: str) -> List[WikiSection]:
-        """Get all subsections of a specific section"""
-        section = self.get_section(section_id)
-        if not section:
-            return []
-
-        return [s for s in self.sections if s.id in section.subsections]
-
-    def get_root_sections(self) -> List[WikiSection]:
-        """Get all root sections"""
-        return [s for s in self.sections if s.id in self.root_sections]
+    def get_all_pages(self) -> List[WikiPageDetail]:
+        """Get all pages from all sections"""
+        pages = []
+        for section in self.sections:
+            pages.extend(section.pages)
+        return pages
 
     def get_total_pages(self) -> int:
-        """Get total number of pages"""
-        return len(self.pages)
+        """Get total number of pages across all sections"""
+        return sum(section.get_total_pages() for section in self.sections)
 
     def get_total_sections(self) -> int:
         """Get total number of sections"""
@@ -434,13 +316,13 @@ class WikiStructure(BaseModel):
         self, importance: PageImportance
     ) -> List[WikiPageDetail]:
         """Get pages filtered by importance level"""
-        return [page for page in self.pages if page.importance == importance]
+        return [page for page in self.get_all_pages() if page.importance == importance]
 
     def __str__(self) -> str:
-        return f"{self.title} ({len(self.pages)} pages, {len(self.sections)} sections)"
+        return f"{self.title} ({self.get_total_pages()} pages, {len(self.sections)} sections)"
 
     def __repr__(self) -> str:
-        return f"WikiStructure(id={self.id}, title={self.title}, pages={len(self.pages)}, sections={len(self.sections)})"
+        return f"WikiStructure(id={self.id}, title={self.title}, pages={self.get_total_pages()}, sections={len(self.sections)})"
 
 
 # API Models
@@ -469,9 +351,8 @@ class WikiSectionCreate(BaseModel):
 
     id: str = Field(description="Section identifier")
     title: str = Field(description="Section title")
-    pages: Optional[List[str]] = Field(default_factory=list, description="Page IDs")
-    subsections: Optional[List[str]] = Field(
-        default_factory=list, description="Subsection IDs"
+    pages: Optional[List[WikiPageCreate]] = Field(
+        default_factory=list, description="Pages in this section"
     )
 
 
@@ -480,14 +361,8 @@ class WikiStructureCreate(BaseModel):
 
     title: str = Field(description="Wiki title")
     description: str = Field(description="Wiki description")
-    pages: Optional[List[WikiPageCreate]] = Field(
-        default_factory=list, description="Wiki pages"
-    )
     sections: Optional[List[WikiSectionCreate]] = Field(
-        default_factory=list, description="Wiki sections"
-    )
-    root_sections: Optional[List[str]] = Field(
-        default_factory=list, description="Root section IDs"
+        default_factory=list, description="Wiki sections with embedded pages"
     )
 
 

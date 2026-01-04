@@ -8,11 +8,13 @@ import logging
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
+from ...dependencies import get_repository_service
 from ...models.config import LLMConfig, StorageConfig
 from ...models.repository import (
+    AnalysisRequest,
     AnalysisStatus,
     Repository,
     RepositoryCreate,
@@ -21,8 +23,8 @@ from ...models.repository import (
     RepositoryResponse,
     RepositoryUpdate,
 )
-from ...services.auth_service import User, auth_service
-from ...services.repository_service import repository_service
+from ...models.user import User
+from ...services.repository_service import RepositoryService
 from ...utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
@@ -46,8 +48,9 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
 
 
 @router.post(
-    "/", 
-    response_model=RepositoryResponse, 
+    "/",
+    response_model=RepositoryResponse,
+    response_model_by_alias=False,
     status_code=status.HTTP_201_CREATED,
     summary="Register a new repository",
     description="Register a code repository for analysis and documentation generation. The repository will be automatically analyzed and indexed for chat queries and wiki generation.",
@@ -61,8 +64,8 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
                             "description": "Register a public GitHub repository",
                             "value": {
                                 "url": "https://github.com/fastapi/fastapi",
-                                "branch": "main"
-                            }
+                                "branch": "main",
+                            },
                         },
                         "github_private": {
                             "summary": "GitHub Private Repository",
@@ -70,17 +73,17 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
                             "value": {
                                 "url": "https://github.com/myorg/private-repo",
                                 "provider": "github",
-                                "branch": "develop"
-                            }
+                                "branch": "develop",
+                            },
                         },
                         "gitlab_repo": {
                             "summary": "GitLab Repository",
                             "description": "Register a GitLab repository",
                             "value": {
                                 "url": "https://gitlab.com/myorg/my-project",
-                                "provider": "gitlab"
-                            }
-                        }
+                                "provider": "gitlab",
+                            },
+                        },
                     }
                 }
             }
@@ -102,21 +105,23 @@ async def get_current_user(token: str = Depends(lambda: "mock-token")) -> User:
                             "webhook_configured": False,
                             "subscribed_events": [],
                             "created_at": "2024-01-01T12:00:00Z",
-                            "updated_at": "2024-01-01T12:00:00Z"
+                            "updated_at": "2024-01-01T12:00:00Z",
                         }
                     }
-                }
+                },
             }
-        }
-    }
+        },
+    },
 )
 async def create_repository(
-    repository_data: RepositoryCreate, current_user: User = Depends(get_current_user)
+    repository_data: RepositoryCreate,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Register and analyze a repository"""
     try:
         # Create repository using service
-        result = await repository_service.create_repository(repository_data)
+        result = await service.create_repository(repository_data)
 
         if result["status"] != "success":
             error_type = result.get("error_type", "UnknownError")
@@ -173,6 +178,7 @@ async def create_repository(
 @router.get(
     "/",
     response_model=RepositoryList,
+    response_model_by_alias=False,
     summary="List repositories",
     description="Get a paginated list of registered repositories with optional filtering by status and provider.",
     openapi_extra={
@@ -197,36 +203,41 @@ async def create_repository(
                                     "webhook_configured": True,
                                     "subscribed_events": ["push", "pull_request"],
                                     "created_at": "2024-01-01T12:00:00Z",
-                                    "updated_at": "2024-01-01T12:30:00Z"
+                                    "updated_at": "2024-01-01T12:30:00Z",
                                 }
                             ],
                             "total": 1,
                             "limit": 50,
-                            "offset": 0
+                            "offset": 0,
                         }
                     }
-                }
+                },
             }
         }
-    }
+    },
 )
 async def list_repositories(
     limit: int = Query(
         50, ge=1, le=100, description="Number of repositories to return"
     ),
     offset: int = Query(0, ge=0, description="Number of repositories to skip"),
-    status: Optional[AnalysisStatus] = Query(None, description="Filter by analysis status"),
-    provider: Optional[RepositoryProvider] = Query(None, description="Filter by repository provider"),
+    analysis_status: Optional[AnalysisStatus] = Query(
+        None, alias="status", description="Filter by analysis status"
+    ),
+    provider: Optional[RepositoryProvider] = Query(
+        None, description="Filter by repository provider"
+    ),
     current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """List repositories with pagination and filtering"""
     try:
         # Get repositories using service
-        result = await repository_service.list_repositories(
-            limit=limit, 
-            offset=offset, 
-            status_filter=status.value if status else None, 
-            provider_filter=provider.value if provider else None
+        result = await service.list_repositories(
+            limit=limit,
+            offset=offset,
+            status_filter=analysis_status.value if analysis_status else None,
+            provider_filter=provider.value if provider else None,
         )
 
         if result["status"] != "success":
@@ -265,18 +276,10 @@ async def list_repositories(
 @router.get(
     "/{repository_id}",
     response_model=RepositoryResponse,
+    response_model_by_alias=False,
     summary="Get repository details",
     description="Retrieve detailed information about a specific repository including analysis status and webhook configuration.",
     openapi_extra={
-        "parameters": [
-            {
-                "name": "repository_id",
-                "in": "path",
-                "required": True,
-                "schema": {"type": "string", "format": "uuid"},
-                "example": "550e8400-e29b-41d4-a716-446655440000"
-            }
-        ],
         "responses": {
             "200": {
                 "description": "Repository details",
@@ -297,10 +300,10 @@ async def list_repositories(
                             "subscribed_events": ["push", "pull_request"],
                             "last_webhook_event": "2024-01-01T13:00:00Z",
                             "created_at": "2024-01-01T12:00:00Z",
-                            "updated_at": "2024-01-01T12:30:00Z"
+                            "updated_at": "2024-01-01T12:30:00Z",
                         }
                     }
-                }
+                },
             },
             "404": {
                 "description": "Repository not found",
@@ -308,21 +311,23 @@ async def list_repositories(
                     "application/json": {
                         "example": {
                             "error": "Repository not found",
-                            "message": "Repository with ID 550e8400-e29b-41d4-a716-446655440000 does not exist"
+                            "message": "Repository with ID 550e8400-e29b-41d4-a716-446655440000 does not exist",
                         }
                     }
-                }
-            }
+                },
+            },
         }
-    }
+    },
 )
 async def get_repository(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Get repository details"""
     try:
         # Get repository using service
-        result = await repository_service.get_repository(repository_id)
+        result = await service.get_repository(repository_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -364,7 +369,9 @@ async def get_repository(
 
 @router.delete("/{repository_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_repository(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Remove repository and all associated data"""
     try:
@@ -379,7 +386,7 @@ async def delete_repository(
             )
 
         # Delete repository using service
-        result = await repository_service.delete_repository(repository_id)
+        result = await service.delete_repository(repository_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -419,72 +426,56 @@ async def delete_repository(
     status_code=status.HTTP_202_ACCEPTED,
     summary="Trigger repository analysis",
     description="Start or restart analysis of a repository. This will analyze the codebase, generate embeddings, and prepare it for chat queries and wiki generation.",
-    openapi_extra={
-        "requestBody": {
+    responses={
+        202: {
+            "description": "Analysis started successfully",
             "content": {
                 "application/json": {
-                    "examples": {
-                        "basic_analysis": {
-                            "summary": "Basic Analysis",
-                            "description": "Trigger analysis with default settings",
-                            "value": {}
-                        },
-                        "force_analysis": {
-                            "summary": "Force Re-analysis",
-                            "description": "Force re-analysis even if already completed",
-                            "value": {
-                                "force": True
-                            }
-                        },
-                        "specific_branch": {
-                            "summary": "Analyze Specific Branch",
-                            "description": "Analyze a specific branch instead of default",
-                            "value": {
-                                "branch": "develop",
-                                "force": False
-                            }
-                        }
+                    "example": {
+                        "repository_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "status": "processing",
+                        "progress": 0,
+                        "current_step": "Analysis started",
+                        "estimated_completion": "2024-01-01T12:45:00Z",
+                        "message": "Analysis started successfully",
                     }
                 }
-            }
-        },
-        "responses": {
-            "202": {
-                "description": "Analysis started successfully",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "repository_id": "550e8400-e29b-41d4-a716-446655440000",
-                            "status": "processing",
-                            "progress": 0,
-                            "current_step": "Analysis started",
-                            "estimated_completion": "2024-01-01T12:45:00Z",
-                            "message": "Analysis started successfully"
-                        }
-                    }
-                }
-            }
+            },
         }
-    }
+    },
 )
 async def trigger_repository_analysis(
     repository_id: UUID,
-    analysis_request: Optional[dict] = None,
+    analysis_request: AnalysisRequest = Body(
+        default=AnalysisRequest(),
+        openapi_examples={
+            "basic_analysis": {
+                "summary": "Basic Analysis",
+                "description": "Trigger analysis with default settings",
+                "value": {},
+            },
+            "force_analysis": {
+                "summary": "Force Re-analysis",
+                "description": "Force re-analysis even if already completed",
+                "value": {"force": True},
+            },
+            "specific_branch": {
+                "summary": "Analyze Specific Branch",
+                "description": "Analyze a specific branch instead of default",
+                "value": {"branch": "develop", "force": False},
+            },
+        },
+    ),
     current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Trigger repository analysis"""
     try:
-        # Parse analysis request
-        force = False
-        branch = None
-
-        if analysis_request:
-            force = analysis_request.get("force", False)
-            branch = analysis_request.get("branch")
-
         # Trigger analysis using service
-        result = await repository_service.trigger_analysis(
-            repository_id=repository_id, force=force, branch=branch
+        result = await service.trigger_analysis(
+            repository_id=repository_id,
+            force=analysis_request.force,
+            branch=analysis_request.branch,
         )
 
         if result["status"] != "success":
@@ -559,8 +550,8 @@ async def trigger_repository_analysis(
                                     "commit_sha": "abc123def456789012345678901234567890abcd",
                                     "documents_processed": 245,
                                     "embeddings_generated": 1250,
-                                    "error_message": None
-                                }
+                                    "error_message": None,
+                                },
                             },
                             "processing": {
                                 "summary": "Analysis In Progress",
@@ -573,8 +564,8 @@ async def trigger_repository_analysis(
                                     "commit_sha": None,
                                     "documents_processed": 110,
                                     "embeddings_generated": 560,
-                                    "error_message": None
-                                }
+                                    "error_message": None,
+                                },
                             },
                             "failed": {
                                 "summary": "Analysis Failed",
@@ -587,23 +578,25 @@ async def trigger_repository_analysis(
                                     "commit_sha": None,
                                     "documents_processed": 0,
                                     "embeddings_generated": 0,
-                                    "error_message": "Failed to clone repository: Permission denied"
-                                }
-                            }
+                                    "error_message": "Failed to clone repository: Permission denied",
+                                },
+                            },
                         }
                     }
-                }
+                },
             }
         }
-    }
+    },
 )
 async def get_analysis_status(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Get analysis status for repository"""
     try:
         # Get analysis status using service
-        result = await repository_service.get_analysis_status(repository_id)
+        result = await service.get_analysis_status(repository_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":
@@ -653,6 +646,7 @@ async def configure_repository_webhook(
     repository_id: UUID,
     webhook_config: dict,
     current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Configure repository webhook settings"""
     try:
@@ -670,7 +664,7 @@ async def configure_repository_webhook(
             )
 
         # Configure webhook using service
-        result = await repository_service.configure_webhook(
+        result = await service.configure_webhook(
             repository_id=repository_id,
             webhook_secret=webhook_secret,
             subscribed_events=subscribed_events,
@@ -726,12 +720,14 @@ async def configure_repository_webhook(
 
 @router.get("/{repository_id}/webhook")
 async def get_repository_webhook_config(
-    repository_id: UUID, current_user: User = Depends(get_current_user)
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: RepositoryService = Depends(get_repository_service),
 ):
     """Get repository webhook configuration and setup instructions"""
     try:
         # Get webhook config using service
-        result = await repository_service.get_webhook_config(repository_id)
+        result = await service.get_webhook_config(repository_id)
 
         if result["status"] != "success":
             if result.get("error_type") == "NotFound":

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(superpowers:writing-plans)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "Skill(superpowers:subagent-driven-development)",
+      "mcp__MongoDB__find",
+      "mcp__MongoDB__list-databases",
+      "mcp__MongoDB__list-collections"
+    ]
+  }
+}

@@ -102,28 +102,24 @@ class TestAPIPerformance:
                 "id": f"wiki_{repository_id}",
                 "title": "Test Repository Documentation",
                 "description": "Generated documentation",
-                "pages": [
-                    {
-                        "id": f"page_{i}",
-                        "title": f"Page {i}",
-                        "description": f"Description for page {i}",
-                        "importance": "medium",
-                        "file_paths": [f"src/file_{i}.py"],
-                        "related_pages": [],
-                        "content": f"Content for page {i}" * 100,  # Substantial content
-                    }
-                    for i in range(10)
-                ],
                 "sections": [
                     {
                         "id": f"section_{i}",
                         "title": f"Section {i}",
-                        "pages": [f"page_{i}"],
-                        "subsections": [],
+                        "pages": [
+                            {
+                                "id": f"page_{i}",
+                                "title": f"Page {i}",
+                                "description": f"Description for page {i}",
+                                "importance": "medium",
+                                "file_paths": [f"src/file_{i}.py"],
+                                "related_pages": [],
+                                "content": f"Content for page {i}" * 100,
+                            }
+                        ],
                     }
                     for i in range(5)
                 ],
-                "root_sections": [f"section_{i}" for i in range(5)],
             }
 
             mock_service.get_wiki_structure.return_value = {
@@ -264,7 +260,7 @@ class TestDatabasePerformance:
     @pytest.mark.performance
     async def test_mongodb_query_performance(self):
         """Test MongoDB query performance"""
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter") as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -296,7 +292,7 @@ class TestDatabasePerformance:
     @pytest.mark.performance
     async def test_vector_search_performance(self):
         """Test vector search performance"""
-        with patch("src.utils.mongodb_adapter.get_mongodb_adapter") as mock_db:
+        with patch("src.services.data_access.get_mongodb_adapter") as mock_db:
             mock_mongodb = AsyncMock()
             mock_db.return_value = mock_mongodb
 
@@ -522,7 +518,7 @@ class TestCachePerformance:
                     "wiki_structure": {
                         "id": f"wiki_{repo_id}",
                         "title": "Test Wiki",
-                        "pages": [],
+                        "description": "Test description",
                         "sections": [],
                     },
                 }
@@ -562,7 +558,7 @@ class TestResourceCleanup:
     @pytest.mark.performance
     async def test_connection_cleanup(self):
         """Test database connection cleanup"""
-        from src.utils.mongodb_adapter import MongoDBAdapter
+        from src.services.data_access import MongoDBAdapter
 
         # Test connection lifecycle
         adapter = MongoDBAdapter()

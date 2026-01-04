@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     )
     debug: bool = Field(default=True, description="Debug mode")
     log_level: str = Field(default="INFO", description="Log level")
+    log_dir: str = Field(default="logs", description="Log directory path")
 
     # API settings
     api_host: str = Field(default="0.0.0.0", description="API host")
@@ -87,12 +88,12 @@ class Settings(BaseSettings):
 
     # LLM provider settings
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key")
-    openai_model: str = Field(default="gpt-4-turbo-preview", description="OpenAI model")
+    openai_model: str = Field(default="gpt-4o-mini", description="OpenAI model")
     openai_max_tokens: int = Field(default=4000, description="OpenAI max tokens")
     openai_temperature: float = Field(default=0.1, description="OpenAI temperature")
 
     google_api_key: Optional[str] = Field(default=None, description="Google API key")
-    gemini_model: str = Field(default="gemini-pro", description="Gemini model")
+    gemini_model: str = Field(default="gemini-2.5-flash-lite", description="Gemini model")
     gemini_max_tokens: int = Field(default=4000, description="Gemini max tokens")
     gemini_temperature: float = Field(default=0.1, description="Gemini temperature")
 
@@ -162,15 +163,81 @@ class Settings(BaseSettings):
         description="Supported programming languages",
     )
 
+    # Document agent file filtering settings
+    default_excluded_dirs: List[str] = Field(
+        default=[
+            ".venv/", "venv/", "env/", "virtualenv/",
+            "node_modules/", "bower_components/", "jspm_packages/",
+            ".git/", ".svn/", ".hg/", ".bzr/",
+            ".idea/", ".vscode/", ".vscode-server/", ".vscode-server-insiders/",
+            ".pytest_cache/", ".pytest/", ".next/",
+        ],
+        description="Default directories to exclude from file tree",
+    )
+    default_excluded_files: List[str] = Field(
+        default=[
+            # Lock files
+            "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "poetry.lock",
+            "Pipfile.lock", "requirements.txt.lock", "Cargo.lock", "composer.lock",
+            ".lock",
+            # OS files
+            ".DS_Store", "Thumbs.db", "desktop.ini", "*.lnk",
+            # Environment files
+            ".env", ".env.*", "*.env", "*.cfg", "*.ini", ".flaskenv",
+            # Git/CI files
+            ".gitignore", ".gitattributes", ".gitmodules", ".github",
+            ".gitlab-ci.yml",
+            # Linter/formatter configs
+            ".prettierrc", ".eslintrc", ".eslintignore", ".stylelintrc",
+            ".editorconfig", ".jshintrc", ".pylintrc", ".flake8",
+            "mypy.ini", "pyproject.toml", "tsconfig.json",
+            # Build configs
+            "webpack.config.js", "babel.config.js", "rollup.config.js",
+            "jest.config.js", "karma.conf.js", "vite.config.js", "next.config.js",
+            # Minified/bundled files
+            "*.min.js", "*.min.css", "*.bundle.js", "*.bundle.css", "*.map",
+            # Archives
+            "*.gz", "*.zip", "*.tar", "*.tgz", "*.rar", "*.7z",
+            "*.iso", "*.dmg", "*.img",
+            # Installers/packages
+            "*.msix", "*.appx", "*.appxbundle", "*.xap", "*.ipa",
+            "*.deb", "*.rpm", "*.msi",
+            # Binaries
+            "*.exe", "*.dll", "*.so", "*.dylib", "*.o", "*.obj",
+            "*.jar", "*.war", "*.ear", "*.jsm", "*.class",
+            # Python compiled
+            "*.pyc", "*.pyd", "*.pyo", "__pycache__",
+        ],
+        description="Default files to exclude from file tree",
+    )
+
     # Monitoring settings
     enable_metrics: bool = Field(default=True, description="Enable metrics")
     metrics_port: int = Field(default=8001, description="Metrics port")
     enable_tracing: bool = Field(default=False, description="Enable tracing")
     jaeger_endpoint: Optional[str] = Field(default=None, description="Jaeger endpoint")
 
+    # LangSmith settings
+    langsmith_api_key: Optional[str] = Field(default=None, description="LangSmith API key")
+    langsmith_project: str = Field(default="autodoc-v2", description="LangSmith project name")
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com", description="LangSmith API endpoint")
+    langsmith_tracing: bool = Field(default=True, description="Enable LangSmith tracing")
+
     # Development settings
     reload: bool = Field(default=True, description="Auto-reload on changes")
     workers: int = Field(default=1, description="Number of workers")
+
+    # MCP Filesystem settings
+    mcp_filesystem_enabled: bool = Field(
+        default=False, description="Enable MCP filesystem integration"
+    )
+    mcp_filesystem_command: str = Field(
+        default="npx", description="MCP filesystem server command"
+    )
+    mcp_filesystem_args: str = Field(
+        default="-y,@modelcontextprotocol/server-filesystem",
+        description="MCP filesystem server arguments (comma-separated). Allowed directories are appended automatically.",
+    )
 
     @property
     def cors_origins_list(self) -> List[str]:
@@ -234,6 +301,46 @@ class Settings(BaseSettings):
             },
         }
         return configs.get(provider, {})
+
+    def configure_langsmith(self) -> None:
+        """Configure LangSmith environment variables"""
+        import os
+        
+        if self.langsmith_tracing and self.langsmith_api_key:
+            os.environ["LANGCHAIN_TRACING_V2"] = "true"
+            os.environ["LANGCHAIN_API_KEY"] = self.langsmith_api_key
+            os.environ["LANGCHAIN_PROJECT"] = self.langsmith_project
+            os.environ["LANGCHAIN_ENDPOINT"] = self.langsmith_endpoint
+        else:
+            # Disable tracing if not configured
+            os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
+    def configure_llm_environment(self) -> None:
+        """Export LLM provider API keys to environment variables.
+        
+        Required because init_chat_model() and other LangChain utilities
+        look for API keys in os.environ, not in Settings attributes.
+        Pydantic BaseSettings reads .env into object attributes but does
+        not automatically export them to os.environ.
+        """
+        import os
+        
+        if self.openai_api_key:
+            os.environ["OPENAI_API_KEY"] = self.openai_api_key
+        if self.google_api_key:
+            os.environ["GOOGLE_API_KEY"] = self.google_api_key
+
+    @property
+    def is_langsmith_enabled(self) -> bool:
+        """Check if LangSmith tracing is enabled and configured"""
+        return self.langsmith_tracing and self.langsmith_api_key is not None
+
+    @property
+    def mcp_filesystem_args_list(self) -> List[str]:
+        """Get MCP filesystem args as list"""
+        if isinstance(self.mcp_filesystem_args, str):
+            return [arg.strip() for arg in self.mcp_filesystem_args.split(",")]
+        return self.mcp_filesystem_args if isinstance(self.mcp_filesystem_args, list) else []
 
 
 # Global settings instance
