@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, List, Optional
 
 from deepagents.graph import AnthropicPromptCachingMiddleware, PatchToolCallsMiddleware, SummarizationMiddleware, TodoListMiddleware
+from langchain.agents.middleware import ModelRetryMiddleware, ToolRetryMiddleware
 import structlog
 import yaml
 from langchain_core.language_models import BaseChatModel
@@ -317,7 +318,17 @@ This information will be extracted into a structured format."""
         middleware=[
             TodoListMiddleware(),
             SummarizationMiddleware(model="gpt-4o-mini"),
-            PatchToolCallsMiddleware()
+            PatchToolCallsMiddleware(),
+            ModelRetryMiddleware(
+                max_retries=3,
+                backoff_factor=2.0,
+                initial_delay=1.0,
+            ),
+            ToolRetryMiddleware(
+                max_retries=3,
+                backoff_factor=2.0,
+                initial_delay=1.0,
+            )
         ]   
     )
 
@@ -365,7 +376,17 @@ async def create_page_agent() -> Any:
         system_prompt=page_prompt,
         middleware=[
             SummarizationMiddleware(model="gpt-4o-mini"),
-            PatchToolCallsMiddleware()
+            PatchToolCallsMiddleware(),
+            ModelRetryMiddleware(
+                max_retries=3,
+                backoff_factor=2.0,
+                initial_delay=1.0,
+            ),
+            ToolRetryMiddleware(
+                max_retries=3,
+                backoff_factor=2.0,
+                initial_delay=1.0,
+            )
         ]
     )
 
