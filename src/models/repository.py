@@ -317,6 +317,19 @@ class RepositoryUpdate(BaseModel):
     )
 
 
+class AnalysisRequest(BaseModel):
+    """Request model for triggering repository analysis"""
+
+    force: bool = Field(
+        default=False,
+        description="Force re-analysis even if repository is already analyzed or in progress",
+    )
+    branch: Optional[str] = Field(
+        default=None,
+        description="Specific branch to analyze. If not provided, uses the default branch",
+    )
+
+
 class RepositoryResponse(Repository):
     """Repository response model for API responses"""
 

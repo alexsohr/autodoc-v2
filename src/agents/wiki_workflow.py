@@ -24,6 +24,11 @@ from src.agents.wiki_react_agents import create_structure_agent, create_page_age
 
 logger = structlog.get_logger(__name__)
 
+# Maximum iterations for structure extraction agent to prevent infinite loops
+# Per LangGraph: recursion_limit = 2 * max_iterations + 1
+MAX_STRUCTURE_ITERATIONS = 15
+STRUCTURE_RECURSION_LIMIT = 2 * MAX_STRUCTURE_ITERATIONS + 1  # = 31
+
 
 def _load_prompts() -> dict:
     """Load prompts from YAML file."""
@@ -169,26 +174,27 @@ async def extract_structure_node(state: WikiWorkflowState) -> Dict[str, Any]:
     """
     clone_path = state.get("clone_path", "")
     readme_content = state.get("readme_content", "")
+    file_tree = state.get("file_tree", "")
 
     # Create React agent with MCP tools
     agent = await create_structure_agent()
 
     # Build user message for the agent
-    user_message = f"""Analyze this repository and create a comprehensive wiki structure.
+    user_message = f"""Analyze this repository and propose a wiki structure that fully explains the code and architecture for a junior developer.
 
-## Repository Context
-- Clone Path: {clone_path}
+Repository root (clone path): {clone_path}
 
-## README
-```
-{readme_content}
-```
+Directory tree:
+```{file_tree}```
+
+README:
+```{readme_content}```
 """
 
     try:
-        result = await agent.ainvoke({
-            "messages": [{"role": "user", "content": user_message}]
-        })
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": user_message}]}
+        )
 
         # Extract structured response
         structured_output = result.get("structured_response")
@@ -253,7 +259,7 @@ async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
     clone_path = state["clone_path"]
 
     # Create React agent with MCP tools (reused for all pages)
-    agent = await create_page_agent(clone_path=clone_path)
+    agent = await create_page_agent()
 
     generated_pages = []
     all_pages = structure.get_all_pages()
@@ -274,40 +280,16 @@ async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
 
         # Build user message for this page
         file_list = "\n".join(f"- {clone_path}/{fp}" for fp in page.file_paths) if page.file_paths else "No specific files assigned"
-
-        user_message = f"""Generate comprehensive documentation for this wiki page.
-
-## Page Details
-- Title: {page.title}
-- Description: {page.description}
-- Importance: {page.importance.value if hasattr(page.importance, 'value') else page.importance}
-
-## Files to Read (MUST READ ALL COMPLETELY)
-{file_list}
-
-## CRITICAL Instructions
-
-1. **READ ALL FILES COMPLETELY** - Use read_file WITHOUT the head parameter
-   - You need full implementation details, not just headers
-   - Read each file in the list above in its entirety
-
-2. **Understand the implementation** - After reading:
-   - Data structures and their purposes
-   - Function logic and data flow
-   - Error handling patterns
-   - Integration with other components
-
-3. **Generate comprehensive documentation** including:
-   - Clear explanation with implementation details
-   - Mermaid diagrams (use graph TD, never LR)
-   - Actual code snippets from source files
-   - Source citations: Sources: [filename:line-range]()
-
-4. **Start output with:** # {page.title}
-
-Remember: All file paths are absolute. Read files COMPLETELY, not just headers!
-"""
-
+        user_message = PROMPTS.get("page_generation_full", {}).get("user_prompt", "").format(
+            page_title=page.title,
+            page_description=page.description,
+            importance=page.importance.value if hasattr(page.importance, 'value') else page.importance,
+            seed_paths_list=file_list,
+            clone_path=clone_path,
+            repo_name=Path(clone_path).name if clone_path else "",
+            repo_description=structure.description
+        )
+        
         try:
             result = await agent.ainvoke({
                 "messages": [{"role": "user", "content": user_message}]

@@ -8,12 +8,13 @@ import logging
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
 from ...dependencies import get_repository_service
 from ...models.config import LLMConfig, StorageConfig
 from ...models.repository import (
+    AnalysisRequest,
     AnalysisStatus,
     Repository,
     RepositoryCreate,
@@ -425,68 +426,56 @@ async def delete_repository(
     status_code=status.HTTP_202_ACCEPTED,
     summary="Trigger repository analysis",
     description="Start or restart analysis of a repository. This will analyze the codebase, generate embeddings, and prepare it for chat queries and wiki generation.",
-    openapi_extra={
-        "requestBody": {
+    responses={
+        202: {
+            "description": "Analysis started successfully",
             "content": {
                 "application/json": {
-                    "examples": {
-                        "basic_analysis": {
-                            "summary": "Basic Analysis",
-                            "description": "Trigger analysis with default settings",
-                            "value": {},
-                        },
-                        "force_analysis": {
-                            "summary": "Force Re-analysis",
-                            "description": "Force re-analysis even if already completed",
-                            "value": {"force": True},
-                        },
-                        "specific_branch": {
-                            "summary": "Analyze Specific Branch",
-                            "description": "Analyze a specific branch instead of default",
-                            "value": {"branch": "develop", "force": False},
-                        },
+                    "example": {
+                        "repository_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "status": "processing",
+                        "progress": 0,
+                        "current_step": "Analysis started",
+                        "estimated_completion": "2024-01-01T12:45:00Z",
+                        "message": "Analysis started successfully",
                     }
                 }
-            }
-        },
-        "responses": {
-            "202": {
-                "description": "Analysis started successfully",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "repository_id": "550e8400-e29b-41d4-a716-446655440000",
-                            "status": "processing",
-                            "progress": 0,
-                            "current_step": "Analysis started",
-                            "estimated_completion": "2024-01-01T12:45:00Z",
-                            "message": "Analysis started successfully",
-                        }
-                    }
-                },
-            }
-        },
+            },
+        }
     },
 )
 async def trigger_repository_analysis(
     repository_id: UUID,
-    analysis_request: Optional[dict] = None,
+    analysis_request: AnalysisRequest = Body(
+        default=AnalysisRequest(),
+        openapi_examples={
+            "basic_analysis": {
+                "summary": "Basic Analysis",
+                "description": "Trigger analysis with default settings",
+                "value": {},
+            },
+            "force_analysis": {
+                "summary": "Force Re-analysis",
+                "description": "Force re-analysis even if already completed",
+                "value": {"force": True},
+            },
+            "specific_branch": {
+                "summary": "Analyze Specific Branch",
+                "description": "Analyze a specific branch instead of default",
+                "value": {"branch": "develop", "force": False},
+            },
+        },
+    ),
     current_user: User = Depends(get_current_user),
     service: RepositoryService = Depends(get_repository_service),
 ):
     """Trigger repository analysis"""
     try:
-        # Parse analysis request
-        force = False
-        branch = None
-
-        if analysis_request:
-            force = analysis_request.get("force", False)
-            branch = analysis_request.get("branch")
-
         # Trigger analysis using service
         result = await service.trigger_analysis(
-            repository_id=repository_id, force=force, branch=branch
+            repository_id=repository_id,
+            force=analysis_request.force,
+            branch=analysis_request.branch,
         )
 
         if result["status"] != "success":

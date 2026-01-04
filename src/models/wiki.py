@@ -82,27 +82,6 @@ class WikiPageDetail(BaseModel):
             raise ValueError("Page description cannot be empty")
         return v.strip()
 
-    @field_validator("file_paths")
-    @classmethod
-    def validate_file_paths(cls, v: List[str]) -> List[str]:
-        """Validate file paths are relative and valid"""
-        if not v:
-            return v
-
-        validated_paths = []
-        for path in v:
-            if not path or not path.strip():
-                continue
-
-            # Normalize path separators and ensure relative
-            normalized_path = path.strip().replace("\\", "/")
-            if normalized_path.startswith("/") or ".." in normalized_path:
-                raise ValueError(f"File path must be relative: {path}")
-
-            validated_paths.append(normalized_path)
-
-        return validated_paths
-
     @field_validator("related_pages")
     @classmethod
     def validate_related_pages(cls, v: List[str]) -> List[str]:
