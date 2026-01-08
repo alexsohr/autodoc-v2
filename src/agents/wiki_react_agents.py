@@ -29,6 +29,7 @@ from src.services.mcp_filesystem_client import MCPFilesystemClient
 from src.tools.llm_tool import LLMTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from src.utils.config_loader import get_settings
+from src.agents.middleware import WikiMemoryMiddleware
 
 logger = structlog.get_logger(__name__)
 
@@ -316,6 +317,7 @@ This information will be extracted into a structured format."""
         system_prompt=system_prompt,
         # NO response_format - Gemini can't do tools + structured output together
         middleware=[
+            WikiMemoryMiddleware("structure_agent"),  # Memory persistence first
             TodoListMiddleware(),
             SummarizationMiddleware(model="gpt-4o-mini"),
             PatchToolCallsMiddleware(),
@@ -329,7 +331,7 @@ This information will be extracted into a structured format."""
                 backoff_factor=2.0,
                 initial_delay=1.0,
             )
-        ]   
+        ]
     )
 
     logger.info(
@@ -375,6 +377,7 @@ async def create_page_agent() -> Any:
         tools=tools,
         system_prompt=page_prompt,
         middleware=[
+            WikiMemoryMiddleware("page_agent"),  # Memory persistence first
             SummarizationMiddleware(model="gpt-4o-mini"),
             PatchToolCallsMiddleware(),
             ModelRetryMiddleware(
