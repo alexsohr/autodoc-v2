@@ -49,7 +49,8 @@ class WikiMemory(BaseDocument):
 
     # Vector embedding for semantic search
     embedding: List[float] = Field(
-        description="Vector embedding (384 dimensions)"
+        default_factory=list,
+        description="Vector embedding (384 dimensions)",
     )
 
     # Source tracking
