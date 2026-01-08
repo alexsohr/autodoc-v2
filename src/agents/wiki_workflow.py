@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
 from src.repository.wiki_structure_repository import WikiStructureRepository
 from src.agents.wiki_react_agents import create_structure_agent, create_page_agent
+from src.services.wiki_memory_service import WikiMemoryService
 
 logger = structlog.get_logger(__name__)
 
@@ -95,6 +96,7 @@ class WikiWorkflowState(TypedDict):
         pages: List of pages with generated content (reducer: append)
         error: Error message if workflow fails
         current_step: Current workflow step for observability
+        force_regenerate: Flag to purge memories and regenerate from scratch
     """
     repository_id: str
     clone_path: str
@@ -104,6 +106,7 @@ class WikiWorkflowState(TypedDict):
     pages: Annotated[List[WikiPageDetail], operator.add]
     error: Optional[str]
     current_step: str
+    force_regenerate: bool
 
 
 # =============================================================================
@@ -175,6 +178,24 @@ async def extract_structure_node(state: WikiWorkflowState) -> Dict[str, Any]:
     clone_path = state.get("clone_path", "")
     readme_content = state.get("readme_content", "")
     file_tree = state.get("file_tree", "")
+    repository_id = state.get("repository_id")
+
+    # Purge memories if force regenerate is requested
+    if state.get("force_regenerate", False) and repository_id:
+        try:
+            repo_uuid = UUID(repository_id) if isinstance(repository_id, str) else repository_id
+            result = await WikiMemoryService.purge_for_repository(repo_uuid)
+            logger.info(
+                "Purged wiki memories for force regenerate",
+                repository_id=repository_id,
+                deleted_count=result.get("deleted_count", 0),
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to purge memories for force regenerate",
+                repository_id=repository_id,
+                error=str(e),
+            )
 
     # Create React agent with MCP tools
     agent = await create_structure_agent()
