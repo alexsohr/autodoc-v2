@@ -8,11 +8,16 @@ Provides data access methods for WikiMemory entities including:
 
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 from uuid import UUID
 
+from pymongo.errors import OperationFailure
+
 from ..models.wiki_memory import MemoryType, WikiMemory
 from .base import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 
 class WikiMemoryRepository(BaseRepository[WikiMemory]):
@@ -57,7 +62,7 @@ class WikiMemoryRepository(BaseRepository[WikiMemory]):
                 "queryVector": query_embedding,
                 "numCandidates": limit * 10,
                 "limit": limit * 2,  # Get extra to allow for threshold filtering
-                "filter": {"repository_id": repository_id},
+                "filter": {"repository_id": str(repository_id)},
             }
         }
         pipeline.append(vector_stage)
@@ -78,17 +83,21 @@ class WikiMemoryRepository(BaseRepository[WikiMemory]):
         pipeline.append({"$limit": limit})
 
         results: List[WikiMemory] = []
-        async for raw in self.collection.aggregate(pipeline):
-            # Map _id to id for Beanie document construction
-            raw_id = raw.get("_id")
-            if raw_id is not None:
-                raw["id"] = raw_id
+        try:
+            async for raw in self.collection.aggregate(pipeline):
+                # Map _id to id for Beanie document construction
+                raw_id = raw.get("_id")
+                if raw_id is not None:
+                    raw["id"] = raw_id
 
-            # Remove computed score field before constructing document
-            raw.pop("score", None)
+                # Remove computed score field before constructing document
+                raw.pop("score", None)
 
-            document = self.document(**raw)
-            results.append(document)
+                document = self.document(**raw)
+                results.append(document)
+        except OperationFailure as e:
+            logger.warning(f"Vector search failed for wiki memories: {e}")
+            return []
 
         return results
 
