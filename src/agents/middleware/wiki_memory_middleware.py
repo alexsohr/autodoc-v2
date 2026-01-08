@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, List, Optional, cast
+from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -132,7 +132,8 @@ class WikiMemoryMiddleware:
                     return "No relevant memories found."
                 formatted = []
                 for m in memories:
-                    formatted.append(f"- [{m['memory_type']}] {m['content'][:300]}...")
+                    content_preview = m['content'][:300] + "..." if len(m['content']) > 300 else m['content']
+                    formatted.append(f"- [{m['memory_type']}] {content_preview}")
                 return f"Found {len(memories)} relevant memories:\n" + "\n".join(formatted)
             return f"Failed to recall memories: {result.get('error', 'Unknown error')}"
 
@@ -156,7 +157,8 @@ class WikiMemoryMiddleware:
                     return "No memories found for these files."
                 formatted = []
                 for m in memories:
-                    formatted.append(f"- [{m['memory_type']}] {m['content'][:300]}...")
+                    content_preview = m['content'][:300] + "..." if len(m['content']) > 300 else m['content']
+                    formatted.append(f"- [{m['memory_type']}] {content_preview}")
                 return f"Found {len(memories)} file-related memories:\n" + "\n".join(formatted)
             return f"Failed to get file memories: {result.get('error', 'Unknown error')}"
 
@@ -191,3 +193,27 @@ class WikiMemoryMiddleware:
         """
         self._repository_id = repository_id
         logger.debug(f"WikiMemoryMiddleware repository_id set to {repository_id}")
+
+    async def awrap_model_call(
+        self,
+        request: Any,
+        handler: Any,
+    ) -> Any:
+        """Extract repository_id from state and inject memory system prompt.
+
+        This method is called by the agent framework before each model call.
+        """
+        # Try to extract repository_id from agent state on first model call
+        if self._repository_id is None:
+            state = getattr(request, 'state', None)
+            if state is not None:
+                if isinstance(state, dict):
+                    repo_id = state.get("repository_id")
+                else:
+                    repo_id = getattr(state, "repository_id", None)
+                if repo_id is not None:
+                    self._repository_id = repo_id if isinstance(repo_id, UUID) else UUID(str(repo_id))
+                    logger.debug(f"WikiMemoryMiddleware extracted repository_id: {self._repository_id}")
+
+        # Call the handler (let the framework handle system prompt injection)
+        return await handler(request)
