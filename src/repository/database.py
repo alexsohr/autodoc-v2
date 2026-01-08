@@ -20,6 +20,7 @@ from ..models.code_document import CodeDocument
 from ..models.repository import Repository
 from ..models.user import UserDocument
 from ..models.wiki import WikiStructure
+from ..models.wiki_memory import WikiMemory
 from ..utils.config_loader import get_settings
 
 
@@ -69,6 +70,7 @@ async def _initialize() -> None:
                 Repository,
                 CodeDocument,
                 WikiStructure,
+                WikiMemory,
                 ChatSession,
                 Question,
                 Answer,
