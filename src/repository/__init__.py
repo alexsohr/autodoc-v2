@@ -6,6 +6,7 @@ from .chat_session_repository import ChatSessionRepository
 from .code_document_repository import CodeDocumentRepository
 from .question_repository import QuestionRepository
 from .repository_repository import RepositoryRepository
+from .wiki_memory_repository import WikiMemoryRepository
 from .wiki_structure_repository import WikiStructureRepository
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "CodeDocumentRepository",
     "QuestionRepository",
     "RepositoryRepository",
+    "WikiMemoryRepository",
     "WikiStructureRepository",
 ]

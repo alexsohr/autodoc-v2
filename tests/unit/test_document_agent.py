@@ -151,8 +151,8 @@ class TestLoadPatternsNode:
 class TestBuildFileTree:
     """Tests for _build_file_tree helper"""
 
-    def test_builds_simple_tree(self):
-        """Should build ASCII tree from directory"""
+    def test_builds_flat_file_list(self):
+        """Should build flat list of absolute file paths"""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create test structure
             (Path(tmpdir) / "src").mkdir()
@@ -160,11 +160,13 @@ class TestBuildFileTree:
             (Path(tmpdir) / "README.md").touch()
 
             agent = self._create_mock_agent()
-            tree = agent._build_file_tree(tmpdir, [], [])
+            file_list = agent._build_file_tree(tmpdir, [], [])
 
-            assert "src/" in tree
-            assert "main.py" in tree
-            assert "README.md" in tree
+            # Should contain absolute paths
+            assert "main.py" in file_list
+            assert "README.md" in file_list
+            # Should be absolute paths (contain tmpdir)
+            assert tmpdir in file_list or str(Path(tmpdir).resolve()) in file_list
 
     def test_excludes_directories(self):
         """Should exclude specified directories"""
@@ -175,10 +177,11 @@ class TestBuildFileTree:
             (Path(tmpdir) / "node_modules" / "pkg.js").touch()
 
             agent = self._create_mock_agent()
-            tree = agent._build_file_tree(tmpdir, ["node_modules/"], [])
+            file_list = agent._build_file_tree(tmpdir, ["node_modules/"], [])
 
-            assert "src/" in tree
-            assert "node_modules" not in tree
+            assert "main.py" in file_list
+            assert "node_modules" not in file_list
+            assert "pkg.js" not in file_list
 
     def test_excludes_files(self):
         """Should exclude specified files"""
@@ -187,10 +190,10 @@ class TestBuildFileTree:
             (Path(tmpdir) / "test.min.js").touch()
 
             agent = self._create_mock_agent()
-            tree = agent._build_file_tree(tmpdir, [], ["*.min.js"])
+            file_list = agent._build_file_tree(tmpdir, [], ["*.min.js"])
 
-            assert "main.py" in tree
-            assert "test.min.js" not in tree
+            assert "main.py" in file_list
+            assert "test.min.js" not in file_list
 
     def _create_mock_agent(self):
         mock_repo_tool = MagicMock()

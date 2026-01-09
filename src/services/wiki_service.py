@@ -262,6 +262,84 @@ class WikiGenerationService:
                 "page_id": page_id,
             }
 
+    async def export_wiki_content(self, repository_id: UUID) -> Dict[str, Any]:
+        """Export complete wiki as a single markdown document.
+
+        Args:
+            repository_id: Repository UUID
+
+        Returns:
+            Dictionary with status and markdown content
+        """
+        try:
+            # Use raw collection to bypass Beanie validation (handles ObjectId _id)
+            wiki_data = await self._wiki_structure_repo.collection.find_one(
+                {"repository_id": str(repository_id)}
+            )
+
+            if not wiki_data:
+                return {
+                    "status": "error",
+                    "error": "Wiki not found for this repository",
+                    "error_type": "WikiNotFound",
+                }
+
+            # Build markdown from raw dict data
+            content = self._format_wiki_as_markdown(wiki_data)
+
+            return {
+                "status": "success",
+                "content": content,
+                "title": wiki_data.get("title", "Wiki"),
+                "repository_id": str(repository_id),
+            }
+
+        except Exception as e:
+            logger.error(f"Export wiki content failed: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "repository_id": str(repository_id),
+            }
+
+    def _format_wiki_as_markdown(self, wiki_data: Dict[str, Any]) -> str:
+        """Format wiki structure as markdown document.
+
+        Args:
+            wiki_data: Serialized wiki structure
+
+        Returns:
+            Complete markdown content
+        """
+        lines = []
+
+        # Wiki title (h1)
+        lines.append(f"# {wiki_data.get('title', 'Documentation')}")
+        lines.append("")
+
+        # Wiki description
+        description = wiki_data.get("description", "")
+        if description:
+            lines.append(description)
+            lines.append("")
+
+        # Sections (h2) with pages (h3)
+        for section in wiki_data.get("sections", []):
+            lines.append(f"# {section.get('title', section.get('id', 'Section'))}")
+            lines.append("")
+
+            for page in section.get("pages", []):
+                lines.append(f"### {page.get('title', page.get('id', 'Page'))}")
+                lines.append("")
+
+                content = page.get("content", "")
+                if content:
+                    lines.append(content)
+                    lines.append("")
+
+        return "\n".join(lines)
+
     async def update_wiki_page_content(
         self, repository_id: UUID, page_id: str, new_content: str
     ) -> Dict[str, Any]:
@@ -810,15 +888,12 @@ Remember: All file paths are absolute. Read files COMPLETELY, not just headers!
 
             # Invoke the React agent
             result = await agent.ainvoke({
-                "messages": [{"role": "user", "content": user_message}]
+                "messages": [{"role": "user", "content": user_message}],
+                "repository_id": str(repository_id),  # Pass to middleware
             })
 
-            # Extract content from last message
-            messages = result.get("messages", [])
-            new_content = ""
-            if messages:
-                last_message = messages[-1]
-                new_content = last_message.content if hasattr(last_message, 'content') else str(last_message)
+            # Use generated_content from PageAgentWrapper
+            new_content = result.get("generated_content", "")
 
             if not new_content:
                 return {

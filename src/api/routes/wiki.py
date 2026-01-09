@@ -92,6 +92,60 @@ async def get_wiki_structure(
         )
 
 
+@router.get("/{repository_id}/wiki_content")
+async def export_wiki_content(
+    repository_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: WikiGenerationService = Depends(get_wiki_service),
+):
+    """Export complete wiki as downloadable markdown file."""
+    try:
+        result = await service.export_wiki_content(repository_id=repository_id)
+
+        if result["status"] != "success":
+            error_type = result.get("error_type", "UnknownError")
+
+            if error_type == "WikiNotFound":
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "Wiki not found",
+                        "message": "No wiki available for this repository. Generate wiki first.",
+                    },
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "error": "Failed to export wiki content",
+                        "message": result["error"],
+                    },
+                )
+
+        # Sanitize filename
+        title = result.get("title", "wiki")
+        safe_title = "".join(c if c.isalnum() or c in "-_" else "_" for c in title)
+        filename = f"{safe_title}.md"
+
+        return Response(
+            content=result["content"],
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Export wiki content endpoint failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Internal server error",
+                "message": "Failed to export wiki content",
+            },
+        )
+
+
 @router.get("/{repository_id}/wiki/pages/{page_id}")
 async def get_wiki_page(
     repository_id: UUID,

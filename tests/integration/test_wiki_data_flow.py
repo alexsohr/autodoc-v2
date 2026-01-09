@@ -23,7 +23,7 @@ async def test_document_processing_data_flows_to_wiki_agent():
     doc_processing_result = {
         "status": "success",
         "clone_path": "/tmp/test_repo",
-        "file_tree": "├── README.md\n└── src/\n    └── main.py",
+        "file_tree": "/tmp/test_repo/README.md\n/tmp/test_repo/src/main.py",
         "documentation_files": [
             {"path": "README.md", "content": "# Test Project"},
             {"path": "docs/API.md", "content": "# API Docs"},
