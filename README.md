@@ -21,8 +21,10 @@ AutoDoc v2 is an intelligent documentation generation system that automatically 
 - **📊 Performance Optimized**: P50 ≤ 500ms API responses, streaming chat with ≤ 1500ms first token
 - **📚 Interactive API Documentation**: Comprehensive Swagger UI with examples and real-time testing
 - **🧪 Test-Driven Development**: 100% TDD implementation with comprehensive test coverage
-- **🔄 Multi-LLM Support**: OpenAI GPT, Google Gemini, Ollama local models
+- **🔄 Multi-LLM Support**: OpenAI GPT, Google Gemini, AWS Bedrock, Ollama local models
 - **📦 Flexible Storage**: Local filesystem, AWS S3, MongoDB with vector capabilities
+- **🧠 Wiki Memory System**: Persistent agent memory across wiki regenerations for consistent documentation
+- **🔧 MCP Filesystem Tools**: Model Context Protocol integration for intelligent codebase exploration
 
 ## 📋 Quick Start
 
@@ -63,11 +65,12 @@ docker run -d --name autodoc-mongo -p 27017:27017 mongo:7.0
 5. **Run the application:**
 ```bash
 # Recommended for development (includes cache cleaning)
-make dev-run                    # Linux/macOS/WSL
+make dev-run                    # Linux/macOS/WSL (via Makefile)
+./scripts/dev-run.sh           # Unix/macOS (direct script)
 .\scripts\dev-run.ps1          # Windows PowerShell
 dev-run.bat                    # Windows Command Prompt
 
-# Alternative: Direct startup
+# Alternative: Direct startup (without cache cleaning)
 python -m src.api.main
 ```
 
@@ -111,15 +114,22 @@ OPENAI_API_KEY=your-openai-api-key
 GOOGLE_API_KEY=your-google-api-key
 OLLAMA_BASE_URL=http://localhost:11434
 
+# AWS Bedrock (optional enterprise LLM)
+AWS_ACCESS_KEY_ID=your-aws-access-key
+AWS_SECRET_ACCESS_KEY=your-aws-secret-key
+AWS_REGION=us-east-1
+
 # LangSmith (Development Tracing & Monitoring)
 LANGSMITH_API_KEY=your-langsmith-api-key
 LANGSMITH_PROJECT=autodoc-v2
 LANGSMITH_TRACING=true
 
+# MCP Filesystem (for wiki generation agent tools)
+MCP_FILESYSTEM_ENABLED=true
+MCP_FILESYSTEM_COMMAND=npx
+MCP_FILESYSTEM_ARGS=-y,@anthropic/mcp-filesystem
+
 # Optional: AWS S3 (if using S3 storage)
-AWS_ACCESS_KEY_ID=your-aws-access-key
-AWS_SECRET_ACCESS_KEY=your-aws-secret-key
-AWS_REGION=us-east-1
 S3_BUCKET_NAME=autodoc-storage
 ```
 
@@ -297,32 +307,39 @@ graph TB
     GP[Git Provider<br/>GitHub/Bitbucket/GitLab] --> API[AutoDoc v2<br/>FastAPI Application]
     API --> DB[(MongoDB<br/>Vector Search)]
     API --> LG[LangGraph<br/>AI Workflows]
-    LG --> LLM[LLM Provider<br/>OpenAI/Gemini/Ollama]
+    LG --> LLM[LLM Provider<br/>OpenAI/Gemini/Bedrock/Ollama]
     API --> SA[Storage Adapters<br/>Local/S3/MongoDB]
-    
+
     subgraph "FastAPI Application"
         API --> AUTH[Auth Middleware]
         API --> LOG[Logging Middleware]
         API --> ERR[Error Handler]
         API --> ROUTES[API Routes]
     end
-    
+
     subgraph "LangGraph Workflows"
         LG --> DA[Document Agent]
-        LG --> WA[Wiki Agent]
+        LG --> WA[Wiki React Agent]
         LG --> WO[Workflow Orchestrator]
     end
-    
+
     subgraph "AI Tools"
         RT[Repository Tool]
         ET[Embedding Tool]
         CT[Context Tool]
         LT[LLM Tool]
-        
+        MCP[MCP Filesystem Tools]
+
         DA --> RT
         DA --> ET
         WA --> CT
         WA --> LT
+        WA --> MCP
+    end
+
+    subgraph "Wiki Memory"
+        WM[(Wiki Memory<br/>MongoDB)]
+        WA --> WM
     end
 ```
 
@@ -388,6 +405,66 @@ flowchart TD
 - **🛡️ Security Layer**: JWT authentication, webhook validation, rate limiting
 - **📊 Observability**: Structured logging, performance monitoring, health checks
 
+### Wiki Generation Architecture
+
+AutoDoc v2 uses a sophisticated wiki generation system built on LangGraph with React agents:
+
+#### React Agent Pattern
+Wiki generation uses the `create_react_agent` pattern with MCP filesystem tools for intelligent codebase exploration:
+
+- **Structure Agent**: Analyzes repository structure, designs wiki organization using Google Gemini
+- **Page Agent**: Generates detailed documentation with code citations using LLM tools
+
+#### Fan-out/Fan-in Page Generation
+Pages are generated in parallel using LangGraph's Send API for optimal performance:
+
+```mermaid
+flowchart TD
+    START([Start]) --> extract_structure[Extract Structure<br/>React Agent]
+    extract_structure --> should_fan_out{Fan-out?}
+    should_fan_out -->|Send per page| generate_single_page[Generate Single Page<br/>×N Workers]
+    should_fan_out -->|error| aggregate[Aggregate]
+    generate_single_page -->|pages reducer| aggregate
+    aggregate --> finalize[Finalize<br/>Save to MongoDB]
+    finalize --> END([End])
+```
+
+**Workflow Benefits:**
+- Fresh agent context per page (no context pollution)
+- Parallel execution with configurable concurrency (default: 5)
+- Isolated failures (one page failing doesn't affect others)
+- Better observability in LangSmith traces
+
+#### MCP Filesystem Tools
+Agents access the codebase through Model Context Protocol tools:
+- `read_text_file`: Read individual source files with head/tail options
+- `read_multiple_files`: Batch file reading for efficiency
+- `directory_tree`: Explore repository structure
+- `list_directory_with_sizes`: Understand file organization
+
+#### Wiki Memory System
+Persistent memory across wiki regenerations for consistent documentation:
+
+| Memory Type | Purpose |
+|-------------|---------|
+| `structural_decision` | Wiki organization choices |
+| `pattern_found` | Coding patterns discovered |
+| `cross_reference` | Relationships between code areas |
+
+Memory is stored in MongoDB with vector embeddings for semantic search and recall.
+
+#### Agent Middleware Stack
+Wiki agents use a composable middleware stack for enhanced capabilities:
+
+| Middleware | Purpose |
+|------------|---------|
+| `WikiMemoryMiddleware` | Persistent memory for structural decisions |
+| `TodoListMiddleware` | Task tracking during exploration |
+| `SummarizationMiddleware` | Context window management |
+| `PatchToolCallsMiddleware` | Tool parameter validation |
+| `ModelRetryMiddleware` | Automatic retry on LLM failures |
+| `ToolRetryMiddleware` | Automatic retry on tool failures |
+
 ### Architectural Improvements
 
 AutoDoc v2 follows a **clean, layered architecture** with proper separation of concerns:
@@ -402,13 +479,27 @@ AutoDoc v2 follows a **clean, layered architecture** with proper separation of c
 ```
 src/
 ├── api/                    # FastAPI endpoints & middleware
+│   ├── main.py            # Application entry point
+│   ├── routes/            # API route handlers
+│   └── middleware/        # Auth, logging, error handling
 ├── services/               # Business logic (clean, no data access)
+│   └── mcp_filesystem_client.py  # MCP tool provider
 ├── repository/             # Data access layer & repository implementations
-│   ├── data_access.py     # Core database infrastructure
+│   ├── database.py        # MongoDB/Beanie connection management
+│   ├── base.py            # BaseRepository[TDocument] generic class
 │   └── *_repository.py    # Domain-specific repositories
 ├── agents/                 # LangGraph AI workflows
+│   ├── document_agent.py  # Document processing workflow
+│   ├── wiki_agent.py      # Wiki generation orchestration
+│   ├── wiki_workflow.py   # Fan-out/fan-in wiki workflow
+│   ├── wiki_react_agents.py  # React agent factories
+│   ├── workflow.py        # Workflow orchestrator
+│   └── middleware/        # Agent middleware (WikiMemory, etc.)
 ├── tools/                  # Shared AI tools & utilities
 ├── models/                 # Pydantic/Beanie data models
+│   └── wiki_memory.py     # Wiki memory model
+├── prompts/                # LLM prompt templates
+│   └── wiki_prompts.yaml  # Wiki generation prompts
 └── utils/                  # Configuration & utilities
 ```
 
@@ -630,9 +721,16 @@ graph TB
 
 ### AI & ML
 - **[OpenAI GPT](https://openai.com/)**: Primary LLM provider
-- **[Google Gemini](https://ai.google.dev/)**: Alternative LLM provider  
+- **[Google Gemini](https://ai.google.dev/)**: Alternative LLM provider
+- **[AWS Bedrock](https://aws.amazon.com/bedrock/)**: Enterprise LLM provider
 - **[Ollama](https://ollama.ai/)**: Local LLM support
 - **Vector Embeddings**: Semantic search and RAG capabilities
+- **[LangSmith](https://smith.langchain.com/)**: LLM observability and tracing
+
+### Agent Infrastructure
+- **[langchain-mcp-adapters](https://github.com/langchain-ai/langchain-mcp-adapters)**: MCP filesystem tools for codebase exploration
+- **[deepagents](https://pypi.org/project/deepagents/)**: Agent middleware stack (retry, summarization, memory)
+- **[ChromaDB](https://www.trychroma.com/)**: Vector store for embeddings
 
 ### DevOps & Quality
 - **[pytest](https://pytest.org/)**: Comprehensive testing framework
@@ -672,6 +770,13 @@ pytest tests/unit/          # Unit tests
 pytest tests/integration/   # Integration tests
 pytest tests/performance/   # Performance tests
 pytest tests/security/      # Security tests
+pytest tests/contract/      # Contract tests
+
+# Run wiki generation tests
+pytest tests/unit/test_wiki_workflow.py -v       # Wiki workflow unit tests
+pytest tests/unit/test_wiki_react_agents.py -v   # React agent tests
+pytest tests/integration/test_wiki_generation.py -v  # Wiki integration tests
+pytest tests/integration/test_wiki_workflow_integration.py -v  # Workflow integration
 
 # Run BDD/Cucumber tests
 pytest tests/bdd/ -v                    # All BDD tests
@@ -837,13 +942,27 @@ AutoDoc v2 includes several utility scripts in the `scripts/` directory to strea
 #### Cache Management Scripts
 - **`scripts/clean_cache.py`**: Cross-platform Python cache cleaner
 - **`scripts/dev-run.ps1`**: Windows PowerShell development server with cache cleaning
+- **`scripts/dev-run.sh`**: Unix/macOS development server with cache cleaning
 - **`scripts/README.md`**: Comprehensive documentation for all development scripts
 - **`dev-run.bat`**: Windows batch file for easy server startup
+
+#### Database Management Scripts
+- **`scripts/drop_indexes.py`**: Drop all MongoDB indexes (for schema migrations)
+- **`scripts/drop_text_indexes.py`**: Drop text indexes only
+- **`scripts/fix_index_conflict.py`**: Resolve index conflicts during Beanie migration
+- **`scripts/fix_index_conflict_v2.py`**: Enhanced index conflict resolution
+- **`scripts/test_startup.py`**: Test application startup and database connectivity
 
 #### Usage Examples
 ```bash
 # Cross-platform cache cleaning
 python scripts/clean_cache.py
+
+# Unix/macOS development
+./scripts/dev-run.sh           # Clean cache + start server
+./scripts/dev-run.sh -c        # Clean cache only
+./scripts/dev-run.sh -s        # Start server without cleaning
+./scripts/dev-run.sh -h        # Show help
 
 # Windows PowerShell (multiple options)
 .\scripts\dev-run.ps1           # Clean cache + start server
@@ -858,6 +977,11 @@ dev-run.bat
 make clean-cache    # Clean cache only
 make dev-run        # Clean cache + start server
 make run           # Start server without cleaning
+
+# Database management
+python scripts/drop_indexes.py           # Drop all indexes
+python scripts/drop_text_indexes.py      # Drop text indexes only
+python scripts/fix_index_conflict.py     # Fix index conflicts
 ```
 
 ### API Development Workflow
