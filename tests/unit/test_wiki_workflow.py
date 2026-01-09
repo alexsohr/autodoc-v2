@@ -1,9 +1,16 @@
 # tests/unit/test_wiki_workflow.py
-"""Tests for WikiWorkflowState TypedDict."""
+"""Tests for wiki workflow including fan-out/fan-in pattern."""
 
 import pytest
-from src.agents.wiki_workflow import WikiWorkflowState
-from src.models.wiki import WikiStructure, WikiPageDetail
+from src.agents.wiki_workflow import (
+    WikiWorkflowState,
+    PageGenerationState,
+    fan_out_to_page_workers,
+    generate_single_page_node,
+    should_fan_out,
+)
+from src.models.wiki import WikiStructure, WikiPageDetail, WikiSection, PageImportance
+from langgraph.types import Send
 
 
 def test_wiki_workflow_state_structure():
@@ -17,9 +24,11 @@ def test_wiki_workflow_state_structure():
         pages=[],
         error=None,
         current_step="init",
+        force_regenerate=False,
     )
     assert state["repository_id"] == "test-repo-id"
     assert state["pages"] == []
+    assert state["force_regenerate"] is False
 
 
 def test_wiki_workflow_state_with_structure():
@@ -57,6 +66,7 @@ def test_wiki_workflow_state_with_structure():
         pages=[],
         error=None,
         current_step="structure_extracted",
+        force_regenerate=False,
     )
 
     assert state["structure"] is not None
@@ -83,6 +93,7 @@ def test_wiki_workflow_state_pages_list():
         pages=[page],
         error=None,
         current_step="page_generated",
+        force_regenerate=False,
     )
 
     assert len(state["pages"]) == 1
@@ -101,6 +112,7 @@ def test_wiki_workflow_state_error_handling():
         pages=[],
         error="Failed to extract wiki structure: LLM timeout",
         current_step="error",
+        force_regenerate=False,
     )
 
     assert state["error"] is not None
@@ -122,6 +134,7 @@ def test_wiki_workflow_state_current_step_tracking():
             pages=[],
             error=None,
             current_step=step,
+            force_regenerate=False,
         )
         assert state["current_step"] == step
 
@@ -150,6 +163,7 @@ async def test_extract_structure_node_success():
         pages=[],
         error=None,
         current_step="init",
+        force_regenerate=False,
     )
 
     # Mock the React agent structured_response output
@@ -211,6 +225,7 @@ async def test_extract_structure_node_error():
         pages=[],
         error=None,
         current_step="init",
+        force_regenerate=False,
     )
 
     with patch("src.agents.wiki_workflow.create_structure_agent") as mock_create:
@@ -224,172 +239,6 @@ async def test_extract_structure_node_error():
         assert result["error"] is not None
         assert "Rate limit" in result["error"]
         assert result["current_step"] == "error"
-
-
-# =============================================================================
-# Tests for generate_pages_node
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_generate_pages_node_success():
-    """generate_pages_node should generate content for all pages sequentially."""
-    from unittest.mock import AsyncMock, patch, MagicMock
-    from src.agents.wiki_workflow import generate_pages_node
-    from src.models.wiki import WikiSection, PageImportance
-
-    structure = WikiStructure(
-        repository_id="00000000-0000-0000-0000-000000000000",
-        title="Test",
-        description="Test wiki",
-        sections=[
-            WikiSection(
-                id="section1",
-                title="Section 1",
-                pages=[
-                    WikiPageDetail(
-                        id="page1",
-                        title="Page 1",
-                        description="First page",
-                        importance=PageImportance.HIGH,
-                    ),
-                    WikiPageDetail(
-                        id="page2",
-                        title="Page 2",
-                        description="Second page",
-                        importance=PageImportance.MEDIUM,
-                    ),
-                ]
-            )
-        ]
-    )
-
-    state = WikiWorkflowState(
-        repository_id="test-repo",
-        clone_path="/tmp/repo",
-        file_tree="src/\n  main.py",
-        readme_content="# Test",
-        structure=structure,
-        pages=[],
-        error=None,
-        current_step="structure_extracted",
-    )
-
-    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
-        mock_agent = AsyncMock()
-        # React agent returns messages with content
-        mock_agent.ainvoke.return_value = {
-            "messages": [MagicMock(content="# Generated Content\n\nThis is the generated content.")]
-        }
-        mock_create.return_value = mock_agent
-
-        result = await generate_pages_node(state)
-
-        assert "pages" in result
-        assert len(result["pages"]) == 2
-        assert result["pages"][0].id == "page1"
-        assert result["pages"][0].content is not None
-        assert result["pages"][0].has_content() is True
-        assert result["pages"][1].id == "page2"
-        assert result["current_step"] == "pages_generated"
-
-
-@pytest.mark.asyncio
-async def test_generate_pages_node_no_structure():
-    """generate_pages_node should handle missing structure gracefully."""
-    from src.agents.wiki_workflow import generate_pages_node
-
-    state = WikiWorkflowState(
-        repository_id="test-repo",
-        clone_path="/tmp/repo",
-        file_tree="src/",
-        readme_content="# Test",
-        structure=None,
-        pages=[],
-        error=None,
-        current_step="init",
-    )
-
-    result = await generate_pages_node(state)
-
-    assert result["current_step"] == "error"
-    assert "No structure" in result.get("error", "")
-
-
-@pytest.mark.asyncio
-async def test_generate_pages_node_with_existing_error():
-    """generate_pages_node should propagate existing errors."""
-    from src.agents.wiki_workflow import generate_pages_node
-
-    state = WikiWorkflowState(
-        repository_id="test-repo",
-        clone_path="/tmp/repo",
-        file_tree="src/",
-        readme_content="# Test",
-        structure=None,
-        pages=[],
-        error="Previous error occurred",
-        current_step="error",
-    )
-
-    result = await generate_pages_node(state)
-
-    assert result["current_step"] == "error"
-    assert "Previous error" in result.get("error", "")
-
-
-@pytest.mark.asyncio
-async def test_generate_pages_node_agent_error():
-    """generate_pages_node should handle agent errors and include error message in content."""
-    from unittest.mock import AsyncMock, patch
-    from src.agents.wiki_workflow import generate_pages_node
-    from src.models.wiki import WikiSection, PageImportance
-
-    structure = WikiStructure(
-        repository_id="00000000-0000-0000-0000-000000000000",
-        title="Test",
-        description="Test wiki",
-        sections=[
-            WikiSection(
-                id="section1",
-                title="Section 1",
-                pages=[
-                    WikiPageDetail(
-                        id="page1",
-                        title="Page 1",
-                        description="First page",
-                        importance=PageImportance.HIGH,
-                    ),
-                ]
-            )
-        ]
-    )
-
-    state = WikiWorkflowState(
-        repository_id="test-repo",
-        clone_path="/tmp/repo",
-        file_tree="src/",
-        readme_content="# Test",
-        structure=structure,
-        pages=[],
-        error=None,
-        current_step="structure_extracted",
-    )
-
-    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
-        mock_agent = AsyncMock()
-        # Agent raises an exception
-        mock_agent.ainvoke.side_effect = Exception("Rate limit exceeded")
-        mock_create.return_value = mock_agent
-
-        result = await generate_pages_node(state)
-
-        # Should still return pages but with error content
-        assert "pages" in result
-        assert len(result["pages"]) == 1
-        assert result["pages"][0].id == "page1"
-        assert "Error generating content" in result["pages"][0].content
-        assert result["current_step"] == "pages_generated"
 
 
 # =============================================================================
@@ -468,6 +317,7 @@ async def test_finalize_node_with_error_state():
         pages=[],
         error="Previous error occurred",
         current_step="error",
+        force_regenerate=False,
     )
 
     result = await finalize_node(state)
@@ -489,6 +339,7 @@ async def test_finalize_node_no_structure():
         pages=[],
         error=None,
         current_step="pages_generated",
+        force_regenerate=False,
     )
 
     result = await finalize_node(state)
@@ -562,9 +413,10 @@ def test_wiki_workflow_compiles():
     workflow = create_wiki_workflow()
 
     assert workflow is not None
-    # Check graph has expected nodes
+    # Check graph has expected nodes for fan-out/fan-in pattern
     assert "extract_structure" in str(workflow.nodes)
-    assert "generate_pages" in str(workflow.nodes)
+    assert "generate_single_page" in str(workflow.nodes)  # Worker node for parallel generation
+    assert "aggregate" in str(workflow.nodes)  # Fan-in node
     assert "finalize" in str(workflow.nodes)
 
 
@@ -648,82 +500,13 @@ async def test_extract_structure_node_no_structured_output():
     assert result["current_step"] == "error"
 
 
-@pytest.mark.asyncio
-async def test_generate_pages_node_uses_react_agent_per_page():
-    """Page generation should invoke React agent for each page sequentially."""
-    from src.agents.wiki_workflow import generate_pages_node
-    from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
-    from uuid import UUID
-    from unittest.mock import patch, AsyncMock, MagicMock
-
-    # Create a structure with 2 pages
-    structure = WikiStructure(
-        repository_id="12345678-1234-5678-1234-567812345678",
-        title="Test Wiki",
-        description="Test",
-        sections=[
-            WikiSection(
-                id="section-1",
-                title="Section 1",
-                description="Test section",
-                order=1,
-                pages=[
-                    WikiPageDetail(
-                        id="page-1",
-                        title="Page 1",
-                        description="First page",
-                        importance=PageImportance.HIGH,
-                        file_paths=["src/main.py"],
-                    ),
-                    WikiPageDetail(
-                        id="page-2",
-                        title="Page 2",
-                        description="Second page",
-                        importance=PageImportance.MEDIUM,
-                        file_paths=["src/utils.py"],
-                    ),
-                ]
-            )
-        ]
-    )
-
-    state = {
-        "repository_id": "12345678-1234-5678-1234-567812345678",
-        "clone_path": "/tmp/test-repo",
-        "file_tree": "src/\n  main.py\n  utils.py",
-        "readme_content": "# Test",
-        "structure": structure,
-        "pages": [],
-        "error": None,
-        "current_step": "structure_extracted",
-    }
-
-    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
-        mock_agent = AsyncMock()
-        # Return different content for each invocation
-        mock_agent.ainvoke.side_effect = [
-            {"messages": [MagicMock(content="# Page 1 Content")]},
-            {"messages": [MagicMock(content="# Page 2 Content")]},
-        ]
-        mock_create.return_value = mock_agent
-
-        result = await generate_pages_node(state)
-
-    # Should create agent once (reused for all pages)
-    mock_create.assert_called_once()
-    # Should invoke agent twice (once per page)
-    assert mock_agent.ainvoke.call_count == 2
-    # Should have 2 pages with content
-    assert len(result.get("pages", [])) == 2
-
-
 # =============================================================================
 # Tests for workflow graph structure
 # =============================================================================
 
 
 def test_workflow_includes_aggregate_node():
-    """Workflow should have 4 nodes: extract_structure, generate_pages, aggregate, finalize."""
+    """Workflow should have 4 nodes: extract_structure, generate_single_page, aggregate, finalize."""
     from src.agents.wiki_workflow import create_wiki_workflow
 
     workflow = create_wiki_workflow()
@@ -733,7 +516,7 @@ def test_workflow_includes_aggregate_node():
     node_names = [name for name in graph.nodes.keys() if name not in ("__start__", "__end__")]
 
     assert "extract_structure" in node_names
-    assert "generate_pages" in node_names
+    assert "generate_single_page" in node_names
     assert "aggregate" in node_names
     assert "finalize" in node_names
 
@@ -949,3 +732,589 @@ async def test_aggregate_node_multiple_pages():
     assert len(updated_structure.sections) == 2
     assert updated_structure.sections[0].id == "section-1"
     assert updated_structure.sections[1].id == "section-2"
+
+
+# =============================================================================
+# Tests for PageGenerationState TypedDict
+# =============================================================================
+
+
+def test_page_generation_state_structure():
+    """PageGenerationState should have required fields for parallel page generation."""
+    page = WikiPageDetail(
+        id="test-page",
+        title="Test Page",
+        description="A test page",
+        importance=PageImportance.HIGH,
+    )
+
+    state = PageGenerationState(
+        page=page,
+        clone_path="/tmp/repo",
+        structure_description="A test wiki about the project",
+        repository_id="00000000-0000-0000-0000-000000000000",
+    )
+
+    assert state["page"] is page
+    assert state["clone_path"] == "/tmp/repo"
+    assert state["structure_description"] == "A test wiki about the project"
+    assert state["repository_id"] == "00000000-0000-0000-0000-000000000000"
+
+
+def test_page_generation_state_with_file_paths():
+    """PageGenerationState page field should support file_paths."""
+    page = WikiPageDetail(
+        id="api-reference",
+        title="API Reference",
+        description="API documentation",
+        importance=PageImportance.HIGH,
+        file_paths=["src/api/main.py", "src/api/routes.py"],
+    )
+
+    state = PageGenerationState(
+        page=page,
+        clone_path="/tmp/my-repo",
+        structure_description="Project documentation",
+        repository_id="12345678-1234-5678-1234-567812345678",
+    )
+
+    assert len(state["page"].file_paths) == 2
+    assert "src/api/main.py" in state["page"].file_paths
+
+
+# =============================================================================
+# Tests for fan_out_to_page_workers
+# =============================================================================
+
+
+def test_fan_out_to_page_workers_returns_send_list():
+    """fan_out_to_page_workers should return List[Send] for each page."""
+    from uuid import uuid4
+
+    structure = WikiStructure(
+        repository_id=str(uuid4()),
+        title="Test Wiki",
+        description="Test description",
+        sections=[
+            WikiSection(
+                id="section-1",
+                title="Section 1",
+                pages=[
+                    WikiPageDetail(
+                        id="page-1",
+                        title="Page 1",
+                        description="First page",
+                        importance=PageImportance.HIGH,
+                    ),
+                    WikiPageDetail(
+                        id="page-2",
+                        title="Page 2",
+                        description="Second page",
+                        importance=PageImportance.MEDIUM,
+                    ),
+                ]
+            )
+        ]
+    )
+
+    state = WikiWorkflowState(
+        repository_id="00000000-0000-0000-0000-000000000000",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=structure,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+        force_regenerate=False,
+    )
+
+    result = fan_out_to_page_workers(state)
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert all(isinstance(send, Send) for send in result)
+
+    # Check Send node name
+    assert result[0].node == "generate_single_page"
+    assert result[1].node == "generate_single_page"
+
+
+def test_fan_out_to_page_workers_send_contains_correct_state():
+    """fan_out_to_page_workers Send objects should contain correct PageGenerationState."""
+    from uuid import uuid4
+
+    page = WikiPageDetail(
+        id="getting-started",
+        title="Getting Started",
+        description="How to get started",
+        importance=PageImportance.HIGH,
+        file_paths=["README.md"],
+    )
+
+    structure = WikiStructure(
+        repository_id=str(uuid4()),
+        title="Test Wiki",
+        description="A test project wiki",
+        sections=[
+            WikiSection(id="intro", title="Introduction", pages=[page])
+        ]
+    )
+
+    state = WikiWorkflowState(
+        repository_id="12345678-1234-5678-1234-567812345678",
+        clone_path="/tmp/my-project",
+        file_tree="src/",
+        readme_content="# My Project",
+        structure=structure,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+        force_regenerate=False,
+    )
+
+    result = fan_out_to_page_workers(state)
+
+    assert len(result) == 1
+    send_arg = result[0].arg
+
+    assert send_arg["page"].id == "getting-started"
+    assert send_arg["clone_path"] == "/tmp/my-project"
+    assert send_arg["structure_description"] == "A test project wiki"
+    assert send_arg["repository_id"] == "12345678-1234-5678-1234-567812345678"
+
+
+def test_fan_out_to_page_workers_returns_empty_on_error():
+    """fan_out_to_page_workers should return empty list when error is present."""
+    state = WikiWorkflowState(
+        repository_id="00000000-0000-0000-0000-000000000000",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=None,
+        pages=[],
+        error="Previous error occurred",
+        current_step="error",
+        force_regenerate=False,
+    )
+
+    result = fan_out_to_page_workers(state)
+
+    assert result == []
+
+
+def test_fan_out_to_page_workers_returns_empty_no_structure():
+    """fan_out_to_page_workers should return empty list when structure is None."""
+    state = WikiWorkflowState(
+        repository_id="00000000-0000-0000-0000-000000000000",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=None,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+        force_regenerate=False,
+    )
+
+    result = fan_out_to_page_workers(state)
+
+    assert result == []
+
+
+def test_fan_out_multiple_sections():
+    """fan_out_to_page_workers should handle pages across multiple sections."""
+    from uuid import uuid4
+
+    structure = WikiStructure(
+        repository_id=str(uuid4()),
+        title="Multi-Section Wiki",
+        description="Wiki with multiple sections",
+        sections=[
+            WikiSection(
+                id="section-1",
+                title="Section 1",
+                pages=[
+                    WikiPageDetail(id="p1", title="P1", description="Page 1", importance=PageImportance.HIGH),
+                ]
+            ),
+            WikiSection(
+                id="section-2",
+                title="Section 2",
+                pages=[
+                    WikiPageDetail(id="p2", title="P2", description="Page 2", importance=PageImportance.MEDIUM),
+                    WikiPageDetail(id="p3", title="P3", description="Page 3", importance=PageImportance.LOW),
+                ]
+            ),
+        ]
+    )
+
+    state = WikiWorkflowState(
+        repository_id="00000000-0000-0000-0000-000000000000",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=structure,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+        force_regenerate=False,
+    )
+
+    result = fan_out_to_page_workers(state)
+
+    assert len(result) == 3
+    page_ids = [send.arg["page"].id for send in result]
+    assert "p1" in page_ids
+    assert "p2" in page_ids
+    assert "p3" in page_ids
+
+
+# =============================================================================
+# Tests for generate_single_page_node
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_generate_single_page_node_success():
+    """generate_single_page_node should return dict with pages list."""
+    from unittest.mock import AsyncMock, patch
+
+    page = WikiPageDetail(
+        id="test-page",
+        title="Test Page",
+        description="A test page",
+        importance=PageImportance.HIGH,
+    )
+
+    state = PageGenerationState(
+        page=page,
+        clone_path="/tmp/repo",
+        structure_description="Test wiki",
+        repository_id="00000000-0000-0000-0000-000000000000",
+    )
+
+    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke.return_value = {
+            "messages": [],
+            "generated_content": "# Test Page\n\nThis is the content."
+        }
+        mock_create.return_value = mock_agent
+
+        result = await generate_single_page_node(state)
+
+    assert "pages" in result
+    assert isinstance(result["pages"], list)
+    assert len(result["pages"]) == 1
+    assert result["pages"][0].id == "test-page"
+    assert result["pages"][0].content == "# Test Page\n\nThis is the content."
+
+
+@pytest.mark.asyncio
+async def test_generate_single_page_node_creates_fresh_agent():
+    """generate_single_page_node should create a fresh agent for each call."""
+    from unittest.mock import AsyncMock, patch
+
+    page = WikiPageDetail(
+        id="page-1",
+        title="Page 1",
+        description="First page",
+        importance=PageImportance.MEDIUM,
+    )
+
+    state = PageGenerationState(
+        page=page,
+        clone_path="/tmp/repo",
+        structure_description="Wiki description",
+        repository_id="00000000-0000-0000-0000-000000000000",
+    )
+
+    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke.return_value = {"generated_content": "Content"}
+        mock_create.return_value = mock_agent
+
+        await generate_single_page_node(state)
+
+    # Verify create_page_agent was called (fresh agent per invocation)
+    mock_create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_single_page_node_handles_error():
+    """generate_single_page_node should handle agent errors gracefully."""
+    from unittest.mock import AsyncMock, patch
+
+    page = WikiPageDetail(
+        id="error-page",
+        title="Error Page",
+        description="Page that will error",
+        importance=PageImportance.LOW,
+    )
+
+    state = PageGenerationState(
+        page=page,
+        clone_path="/tmp/repo",
+        structure_description="Test wiki",
+        repository_id="00000000-0000-0000-0000-000000000000",
+    )
+
+    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke.side_effect = Exception("LLM rate limit exceeded")
+        mock_create.return_value = mock_agent
+
+        result = await generate_single_page_node(state)
+
+    # Should still return a page, but with error content
+    assert "pages" in result
+    assert len(result["pages"]) == 1
+    assert result["pages"][0].id == "error-page"
+    assert "Error generating content" in result["pages"][0].content
+    assert "rate limit" in result["pages"][0].content.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_single_page_node_no_content():
+    """generate_single_page_node should handle empty content response."""
+    from unittest.mock import AsyncMock, patch
+
+    page = WikiPageDetail(
+        id="empty-page",
+        title="Empty Page",
+        description="Page with no content",
+        importance=PageImportance.LOW,
+    )
+
+    state = PageGenerationState(
+        page=page,
+        clone_path="/tmp/repo",
+        structure_description="Test wiki",
+        repository_id="00000000-0000-0000-0000-000000000000",
+    )
+
+    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
+        mock_agent = AsyncMock()
+        mock_agent.ainvoke.return_value = {
+            "messages": [],
+            "generated_content": ""  # Empty content
+        }
+        mock_create.return_value = mock_agent
+
+        result = await generate_single_page_node(state)
+
+    assert "pages" in result
+    assert len(result["pages"]) == 1
+    assert result["pages"][0].content == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_single_page_node_with_file_paths():
+    """generate_single_page_node should pass file_paths to agent prompt."""
+    from unittest.mock import AsyncMock, patch
+
+    page = WikiPageDetail(
+        id="api-page",
+        title="API Reference",
+        description="API documentation",
+        importance=PageImportance.HIGH,
+        file_paths=["src/api/main.py", "src/api/routes.py"],
+    )
+
+    state = PageGenerationState(
+        page=page,
+        clone_path="/tmp/my-project",
+        structure_description="Project wiki",
+        repository_id="00000000-0000-0000-0000-000000000000",
+    )
+
+    captured_message = None
+
+    with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
+        mock_agent = AsyncMock()
+
+        async def capture_invoke(invoke_arg):
+            nonlocal captured_message
+            captured_message = invoke_arg["messages"][0]["content"]
+            return {"generated_content": "# API Reference"}
+
+        mock_agent.ainvoke.side_effect = capture_invoke
+        mock_create.return_value = mock_agent
+
+        await generate_single_page_node(state)
+
+    # Verify file paths are in the prompt
+    assert "/tmp/my-project/src/api/main.py" in captured_message
+    assert "/tmp/my-project/src/api/routes.py" in captured_message
+
+
+# =============================================================================
+# Tests for should_fan_out
+# =============================================================================
+
+
+def test_should_fan_out_returns_aggregate_on_error():
+    """should_fan_out should return 'aggregate' when error exists."""
+    state = WikiWorkflowState(
+        repository_id="00000000-0000-0000-0000-000000000000",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=None,
+        pages=[],
+        error="Previous error",
+        current_step="error",
+        force_regenerate=False,
+    )
+
+    result = should_fan_out(state)
+
+    assert result == "aggregate"
+
+
+def test_should_fan_out_returns_aggregate_no_structure():
+    """should_fan_out should return 'aggregate' when structure is None."""
+    state = WikiWorkflowState(
+        repository_id="00000000-0000-0000-0000-000000000000",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=None,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+        force_regenerate=False,
+    )
+
+    result = should_fan_out(state)
+
+    assert result == "aggregate"
+
+
+def test_should_fan_out_returns_send_list():
+    """should_fan_out should return List[Send] when structure exists."""
+    from uuid import uuid4
+
+    structure = WikiStructure(
+        repository_id=str(uuid4()),
+        title="Test Wiki",
+        description="Test description",
+        sections=[
+            WikiSection(
+                id="section-1",
+                title="Section 1",
+                pages=[
+                    WikiPageDetail(
+                        id="page-1",
+                        title="Page 1",
+                        description="First",
+                        importance=PageImportance.HIGH,
+                    ),
+                ]
+            )
+        ]
+    )
+
+    state = WikiWorkflowState(
+        repository_id="00000000-0000-0000-0000-000000000000",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=structure,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+        force_regenerate=False,
+    )
+
+    result = should_fan_out(state)
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], Send)
+    assert result[0].node == "generate_single_page"
+
+
+def test_should_fan_out_multiple_pages():
+    """should_fan_out should return one Send per page."""
+    from uuid import uuid4
+
+    structure = WikiStructure(
+        repository_id=str(uuid4()),
+        title="Test Wiki",
+        description="Test description",
+        sections=[
+            WikiSection(
+                id="section-1",
+                title="Section 1",
+                pages=[
+                    WikiPageDetail(id="p1", title="P1", description="Page 1", importance=PageImportance.HIGH),
+                    WikiPageDetail(id="p2", title="P2", description="Page 2", importance=PageImportance.MEDIUM),
+                ]
+            ),
+            WikiSection(
+                id="section-2",
+                title="Section 2",
+                pages=[
+                    WikiPageDetail(id="p3", title="P3", description="Page 3", importance=PageImportance.LOW),
+                ]
+            )
+        ]
+    )
+
+    state = WikiWorkflowState(
+        repository_id="00000000-0000-0000-0000-000000000000",
+        clone_path="/tmp/repo",
+        file_tree="src/",
+        readme_content="# Test",
+        structure=structure,
+        pages=[],
+        error=None,
+        current_step="structure_extracted",
+        force_regenerate=False,
+    )
+
+    result = should_fan_out(state)
+
+    assert isinstance(result, list)
+    assert len(result) == 3
+    assert all(isinstance(send, Send) for send in result)
+
+
+# =============================================================================
+# Tests for workflow graph includes new nodes
+# =============================================================================
+
+
+def test_workflow_includes_fan_out_nodes():
+    """Workflow should include generate_single_page for fan-out pattern."""
+    from src.agents.wiki_workflow import create_wiki_workflow
+
+    workflow = create_wiki_workflow()
+    graph = workflow.get_graph()
+    node_names = [name for name in graph.nodes.keys() if name not in ("__start__", "__end__")]
+
+    # Must have the worker node for fan-out
+    assert "generate_single_page" in node_names
+
+    # Should NOT have old sequential generate_pages
+    assert "generate_pages" not in node_names
+
+
+def test_workflow_has_correct_edge_from_extract_structure():
+    """Workflow extract_structure should have conditional edge for fan-out."""
+    from src.agents.wiki_workflow import create_wiki_workflow
+
+    workflow = create_wiki_workflow()
+    graph = workflow.get_graph()
+
+    # Find edges from extract_structure
+    extract_node = graph.nodes.get("extract_structure")
+    assert extract_node is not None
+
+    # The graph should have edges that allow routing to generate_single_page or aggregate
+    # This verifies the conditional edge setup
+    edges = graph.edges
+    edge_sources = [edge.source for edge in edges]
+    assert "extract_structure" in edge_sources

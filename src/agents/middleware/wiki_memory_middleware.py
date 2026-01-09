@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Annotated, Any, List, Optional
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -11,37 +11,62 @@ if TYPE_CHECKING:
 import logging
 from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import AgentState
+from typing_extensions import NotRequired
 
 from ...models.wiki_memory import MemoryType
 
 logger = logging.getLogger(__name__)
 
 
+class WikiMemoryState(AgentState):
+    """State schema for wiki memory middleware - adds repository_id and generated_content to agent state."""
+
+    repository_id: NotRequired[Optional[str]]
+    """Repository ID for memory operations."""
+
+    generated_content: NotRequired[Optional[str]]
+    """Extracted wiki page content from agent messages."""
+
+
 # System prompt to guide agent on memory usage
-WIKI_MEMORY_SYSTEM_PROMPT = """## Wiki Memory System
+WIKI_MEMORY_SYSTEM_PROMPT = """## Wiki Memory System - REQUIRED WORKFLOW
 
-You have access to a persistent memory system that helps you maintain context across wiki generations.
-Use these memory tools to store and recall structural decisions, patterns, and cross-references.
+You have access to a persistent memory system. Using this system is **MANDATORY** - not optional.
 
-### Memory Tools Available:
-- `store_memory`: Store structural decisions, patterns found, or cross-references for future generations
-- `recall_memories`: Search for relevant past memories using semantic similarity
-- `get_file_memories`: Get memories related to specific source files you're analyzing
+### REQUIRED: Memory Workflow
 
-### When to Store Memories:
-- **Structural decisions**: When you decide on wiki organization, section groupings, or page hierarchies
-- **Patterns found**: When you identify recurring patterns in the codebase
-- **Cross-references**: When you notice relationships between different parts of the codebase
+**STEP 1 - BEFORE starting ANY work:**
+Call `recall_memories` with a query describing what you're about to work on.
+This retrieves decisions from previous wiki generations that you MUST consider.
+Example: `recall_memories(query="wiki structure decisions for repository")`
 
-### Memory Types:
-- `structural_decision`: Decisions about wiki structure and organization
-- `pattern_found`: Patterns or conventions discovered in the codebase
-- `cross_reference`: Relationships between different code areas or wiki sections
+**STEP 2 - DURING your work:**
+When analyzing files, call `get_file_memories` to retrieve past observations about those files.
+Example: `get_file_memories(file_paths=["src/main.py", "src/utils.py"])`
 
-Be proactive about storing important decisions so they persist across regenerations."""
+**STEP 3 - BEFORE completing your task:**
+Store at least ONE memory capturing your key decisions or findings.
+Example: `store_memory(content="Organized wiki into 3 sections: Core, API, Utils based on package structure", memory_type="structural_decision")`
+
+### Memory Tools:
+- `recall_memories(query, limit=5)` - Search for relevant past memories
+- `get_file_memories(file_paths)` - Get memories for specific files
+- `store_memory(content, memory_type, file_paths?, related_pages?)` - Store a new memory
+
+### Memory Types (for store_memory):
+- `structural_decision` - Wiki organization choices (sections, page hierarchy)
+- `pattern_found` - Coding patterns/conventions discovered
+- `cross_reference` - Relationships between code areas
+
+**FAILURE TO USE MEMORY TOOLS = INCOMPLETE TASK**
+Your work is NOT complete until you have:
+1. Recalled relevant memories at the start
+2. Stored at least one memory with your decisions"""
 
 
-class WikiMemoryMiddleware:
+class WikiMemoryMiddleware(AgentMiddleware):
     """Middleware that provides persistent memory capabilities to wiki agents.
 
     Self-contained middleware that:
@@ -56,6 +81,8 @@ class WikiMemoryMiddleware:
             ...
         ]
     """
+
+    state_schema = WikiMemoryState
 
     def __init__(
         self,
@@ -101,7 +128,11 @@ class WikiMemoryMiddleware:
                 related_pages=related_pages,
             )
             if result["status"] == "success":
-                return f"Memory stored successfully (ID: {result['memory_id']})"
+                chunks = result.get("chunks_created", 1)
+                memory_ids = result.get("memory_ids", [])
+                if chunks > 1:
+                    return f"Memory stored in {chunks} chunks (IDs: {', '.join(memory_ids)})"
+                return f"Memory stored successfully (ID: {memory_ids[0] if memory_ids else 'unknown'})"
             return f"Failed to store memory: {result.get('error', 'Unknown error')}"
 
         @tool
@@ -215,5 +246,22 @@ class WikiMemoryMiddleware:
                     self._repository_id = repo_id if isinstance(repo_id, UUID) else UUID(str(repo_id))
                     logger.debug(f"WikiMemoryMiddleware extracted repository_id: {self._repository_id}")
 
-        # Call the handler (let the framework handle system prompt injection)
-        return await handler(request)
+        # Inject memory system prompt into the request
+        if hasattr(request, 'system_message') and request.system_message is not None:
+            new_system_content = [
+                *request.system_message.content_blocks,
+                {"type": "text", "text": f"\n\n{self.system_prompt}"},
+            ]
+        else:
+            new_system_content = [{"type": "text", "text": self.system_prompt}]
+
+        new_system_message = SystemMessage(
+            content=new_system_content  # type: ignore[arg-type]
+        )
+
+        # Call handler with modified request
+        if hasattr(request, 'override'):
+            return await handler(request.override(system_message=new_system_message))
+        else:
+            # Fallback if request doesn't have override method
+            return await handler(request)

@@ -38,11 +38,11 @@ structure_agent:
     ===============================================================================
     The user will provide:
     - {clone_path} repository root
-    - a pre-calculated directory tree (file_tree)
+    - a list of all files in the repository with their absolute paths (file_tree)
     - README content (readme_content)
 
     IMPORTANT:
-    - Use the provided tree + README as your primary navigation map.
+    - Use the provided file list + README as your primary navigation map.
 
     ===============================================================================
     TOOLING & PATH RULES
@@ -208,13 +208,13 @@ page_generation_full:
     - read files partially (by line ranges / head)
     - read files in batch
     - list files inside a directory
-    - All tools use absolute paths as input. concatinate the clone_path with the relative path to get the absolute path.
+    - All tools require ABSOLUTE paths as input. The seed paths provided to you are already absolute - use them directly.
 
     ===============================================================================
     NON-NEGOTIABLE OUTPUT QUALITY RULES
     ===============================================================================
-    - Start the page with a single H2: `## <Page Title>`
-    - Use clear H2/H3/H4 structure and keep it junior-developer friendly.
+    - Start the page with a single H3: `### <Page Title>`
+    - Use clear H3/H4/H5 structure and keep it junior-developer friendly.
     - Use Mermaid diagrams to explain flows and relationships, sequence diagrams, state diagrams, etc. (accurate, evidence-based).
     - Include small, relevant code snippets from the repo.
     - Every meaningful claim must have a citation.
@@ -242,16 +242,13 @@ page_generation_full:
     ===============================================================================
     FILE READING STRATEGY (EFFICIENT + NO RE-READS)
     ===============================================================================
-    You will be given “seed paths” that can include BOTH files and directories.
+    You will be given “seed_paths” that can include BOTH files with their absolute paths.
 
     1) Expand directories (if any) using directory listing tools.
       - Prefer “high-signal” files: entrypoints, public interfaces, wiring/config, core modules, tests that describe behavior.
       - Avoid generated/dependency folders unless clearly relevant.
 
     2) Prefer batch reads for multiple small files (<50KB) in the same area.
-
-    3) Do NOT “read everything completely” by default.
-      - Full reads are allowed ONLY for small, high-value files (<50KB) when needed.
 
     ===============================================================================
     CLEAR EXIT STRATEGY (ANTI-INFINITE-LOOP)
@@ -267,7 +264,7 @@ page_generation_full:
     B) Diminishing returns:
       - The last 3 files read did not add any new information relevant to the page.
 
-    If you exit with unknowns, include an “Open Questions” section and cite the next files/dirs to inspect.
+    If you exit with unknowns, include an “Open Questions” section and cite the next files to inspect.
 
     ===============================================================================
     PAGE CONTENT BLUEPRINT (DEFAULT)
@@ -275,7 +272,7 @@ page_generation_full:
     Use this structure unless the page topic clearly requires a different layout:
 
     1) Overview
-    2) Where This Lives in the Repo (key folders/files)
+    2) Where This Lives in the Repo (key files)
     3) Responsibilities and Boundaries (what it does / does not do)
     4) Key Components (table)
     5) Primary Flows (Mermaid + narrative)
@@ -292,7 +289,7 @@ page_generation_full:
     ## Repository Context
     - Repo name: {repo_name}
     - Repo description: {repo_description}
-    - Repository root (absolute) <clone_path>: {clone_path}
+    - Repository root (absolute): {clone_path}
 
     ## Page Details
     - Title: {page_title}
@@ -301,6 +298,7 @@ page_generation_full:
 
     ## Seed Paths (files and/or directories)
     These are starting hints, not a complete list. Expand directories as needed and follow references to reach at least 5 relevant files.
-    All paths are relative and should be concatenated with the clone_path to get the absolute path to be used as input for the tools.
+    IMPORTANT: All paths below are ABSOLUTE paths. Use them exactly as shown when calling tools - do NOT modify, truncate, or extract relative portions from these paths.
 
+    ## Seed Paths List
     {seed_paths_list}

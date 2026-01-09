@@ -1,27 +1,28 @@
 """
-Wiki generation workflow using LangGraph sequential pattern.
+Wiki generation workflow using LangGraph with fan-out/fan-in pattern.
 
 This module replaces the autonomous deep agent approach with a predictable
 workflow that:
 1. Extracts wiki structure (deterministic)
-2. Generates pages sequentially
-3. Finalizes wiki storage
+2. Generates pages in parallel using Send API (fan-out/fan-in)
+3. Aggregates generated pages back into structure
+4. Finalizes wiki storage
 """
 
 import operator
-import yaml
 from pathlib import Path
-from typing import Annotated, Optional, List, TypedDict, Dict, Any
-from uuid import uuid4, UUID
+from typing import Annotated, Any, Dict, List, Optional, TypedDict, Union
+from uuid import UUID
 
 import structlog
-from langgraph.graph import StateGraph, START, END
+import yaml
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 from pydantic import BaseModel, Field
 
-from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+from src.agents.wiki_react_agents import create_page_agent, create_structure_agent
+from src.models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
 from src.repository.wiki_structure_repository import WikiStructureRepository
-from src.agents.wiki_react_agents import create_structure_agent, create_page_agent
-from src.services.wiki_memory_service import WikiMemoryService
 
 logger = structlog.get_logger(__name__)
 
@@ -109,6 +110,18 @@ class WikiWorkflowState(TypedDict):
     force_regenerate: bool
 
 
+class PageGenerationState(TypedDict):
+    """State for single page generation worker.
+
+    Used by the fan-out pattern where each page is generated in parallel
+    by a separate worker node.
+    """
+    page: WikiPageDetail          # The page to generate
+    clone_path: str               # Repository path
+    structure_description: str    # Wiki description for context
+    repository_id: str            # For middleware
+
+
 # =============================================================================
 # Workflow Nodes
 # =============================================================================
@@ -180,28 +193,12 @@ async def extract_structure_node(state: WikiWorkflowState) -> Dict[str, Any]:
     file_tree = state.get("file_tree", "")
     repository_id = state.get("repository_id")
 
-    # Purge memories if force regenerate is requested
-    if state.get("force_regenerate", False) and repository_id:
-        try:
-            repo_uuid = UUID(repository_id) if isinstance(repository_id, str) else repository_id
-            result = await WikiMemoryService.purge_for_repository(repo_uuid)
-            logger.info(
-                "Purged wiki memories for force regenerate",
-                repository_id=repository_id,
-                deleted_count=result.get("deleted_count", 0),
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to purge memories for force regenerate",
-                repository_id=repository_id,
-                error=str(e),
-            )
-
     # Create React agent with MCP tools
     agent = await create_structure_agent()
 
     # Build user message for the agent
-    user_message = f"""Analyze this repository and propose a wiki structure that fully explains the code and architecture for a junior developer.
+    user_message = f"""Analyze this repository and propose a wiki structure \
+that fully explains the code and architecture for a junior developer.
 
 Repository root (clone path): {clone_path}
 
@@ -214,7 +211,10 @@ README:
 
     try:
         result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": user_message}]}
+            {
+                "messages": [{"role": "user", "content": user_message}],
+                "repository_id": repository_id,  # Pass to middleware
+            }
         )
 
         # Extract structured response
@@ -250,103 +250,118 @@ README:
         }
 
 
-async def generate_pages_node(state: WikiWorkflowState) -> Dict[str, Any]:
-    """Generate content for all wiki pages sequentially using React agents.
+# =============================================================================
+# Fan-out/Fan-in Page Generation (Parallel)
+# =============================================================================
 
-    Creates a React agent with MCP filesystem tools and invokes it
-    for each page in sequence. The agent can read source files to
-    generate accurate, source-grounded documentation.
+
+def fan_out_to_page_workers(state: WikiWorkflowState) -> List[Send]:
+    """Fan-out: create Send for each page to generate.
+
+    Creates a Send object for each page in the wiki structure,
+    allowing parallel execution of page generation workers.
 
     Args:
-        state: Current state with extracted structure
+        state: Current workflow state with extracted structure
 
     Returns:
-        Dict with 'pages' list and updated 'current_step'
+        List of Send objects, one per page to generate
     """
-    # Check for existing errors or missing structure
-    if state.get("error"):
-        return {
-            "error": state.get("error"),
-            "current_step": "error",
-        }
-
-    if not state.get("structure"):
-        return {
-            "error": "No structure available",
-            "current_step": "error",
-        }
+    if state.get("error") or not state.get("structure"):
+        return []
 
     structure = state["structure"]
-    clone_path = state["clone_path"]
-
-    # Create React agent with MCP tools (reused for all pages)
-    agent = await create_page_agent()
-
-    generated_pages = []
     all_pages = structure.get_all_pages()
 
-    logger.info(
-        "Starting sequential page generation",
-        total_pages=len(all_pages),
+    logger.info("Fanning out page generation", total_pages=len(all_pages))
+
+    return [
+        Send("generate_single_page", {
+            "page": page,
+            "clone_path": state["clone_path"],
+            "structure_description": structure.description,
+            "repository_id": state["repository_id"],
+        })
+        for page in all_pages
+    ]
+
+
+async def generate_single_page_node(state: PageGenerationState) -> Dict[str, Any]:
+    """Generate content for a single wiki page.
+
+    Each invocation gets a fresh agent with clean context.
+    Returns a single page to be aggregated via reducer.
+
+    Args:
+        state: PageGenerationState with page details and context
+
+    Returns:
+        Dict with 'pages' list containing the single generated page
+    """
+    page = state["page"]
+    clone_path = state["clone_path"]
+    repository_id = state["repository_id"]
+    structure_description = state["structure_description"]
+
+    logger.info("Generating single page", page_id=page.id, page_title=page.title)
+
+    # Create FRESH agent for this page (no shared context)
+    agent = await create_page_agent()
+
+    # Build user message for this page
+    if page.file_paths:
+        file_list = "\n".join(f"- {clone_path}/{fp}" for fp in page.file_paths)
+    else:
+        file_list = "No specific files assigned"
+    user_message = PROMPTS.get("page_generation_full", {}).get("user_prompt", "").format(
+        page_title=page.title,
+        page_description=page.description,
+        importance=page.importance.value if hasattr(page.importance, 'value') else page.importance,
+        seed_paths_list=file_list,
         clone_path=clone_path,
+        repo_name=Path(clone_path).name if clone_path else "",
+        repo_description=structure_description
     )
 
-    for idx, page in enumerate(all_pages):
-        logger.info(
-            "Generating page",
-            page_id=page.id,
-            page_title=page.title,
-            progress=f"{idx + 1}/{len(all_pages)}",
-        )
+    try:
+        result = await agent.ainvoke({
+            "messages": [{"role": "user", "content": user_message}],
+            "repository_id": repository_id,
+        })
+        content = result.get("generated_content", "")
 
-        # Build user message for this page
-        file_list = "\n".join(f"- {clone_path}/{fp}" for fp in page.file_paths) if page.file_paths else "No specific files assigned"
-        user_message = PROMPTS.get("page_generation_full", {}).get("user_prompt", "").format(
-            page_title=page.title,
-            page_description=page.description,
-            importance=page.importance.value if hasattr(page.importance, 'value') else page.importance,
-            seed_paths_list=file_list,
-            clone_path=clone_path,
-            repo_name=Path(clone_path).name if clone_path else "",
-            repo_description=structure.description
-        )
-        
-        try:
-            result = await agent.ainvoke({
-                "messages": [{"role": "user", "content": user_message}]
-            })
+        if not content:
+            logger.warning("No content generated", page_id=page.id)
 
-            # Extract content from last message
-            messages = result.get("messages", [])
-            content = ""
-            if messages:
-                last_message = messages[-1]
-                content = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        page_with_content = page.model_copy(update={"content": content})
 
-            page_with_content = page.model_copy(update={"content": content})
+    except Exception as e:
+        logger.error("Page generation failed", page_id=page.id, error=str(e))
+        page_with_content = page.model_copy(update={
+            "content": f"*Error generating content: {str(e)}*"
+        })
 
-        except Exception as e:
-            logger.error(
-                "Page generation failed",
-                page_id=page.id,
-                error=str(e),
-            )
-            page_with_content = page.model_copy(update={
-                "content": f"*Error generating content: {str(e)}*"
-            })
+    return {"pages": [page_with_content]}
 
-        generated_pages.append(page_with_content)
 
-    logger.info(
-        "Page generation complete",
-        total_pages=len(generated_pages),
-        pages_with_content=len([p for p in generated_pages if p.content]),
-    )
+def should_fan_out(state: WikiWorkflowState) -> Union[List[Send], str]:
+    """Decide whether to fan out or route to error handling.
 
-    return {
-        "pages": generated_pages,
-        "current_step": "pages_generated",
-    }
+    Routes to fan-out if structure exists, otherwise goes directly
+    to aggregate node (which will handle error state).
+
+    Args:
+        state: Current workflow state
+
+    Returns:
+        List of Send objects for fan-out, or "aggregate" string for error path
+    """
+    if state.get("error"):
+        return "aggregate"
+    if not state.get("structure"):
+        return "aggregate"
+
+    return fan_out_to_page_workers(state)
 
 
 async def aggregate_node(state: WikiWorkflowState) -> Dict[str, Any]:
@@ -463,13 +478,15 @@ async def finalize_node(state: WikiWorkflowState) -> Dict[str, Any]:
 
 
 def create_wiki_workflow():
-    """Create and compile the wiki generation workflow.
+    """Create and compile the wiki generation workflow with fan-out/fan-in.
 
-    The workflow follows a sequential pattern:
+    The workflow uses parallel page generation:
     1. extract_structure: Analyze repo and create wiki structure
-    2. generate_pages: Generate content for all pages sequentially
-    3. aggregate: Merge page content back into structure
-    4. finalize: Save to database
+    2. Fan-out: Create parallel workers for each page via Send API
+    3. generate_single_page (×N): Each worker generates one page
+    4. Fan-in: Workers converge to aggregate node via reducer
+    5. aggregate: Merge page content back into structure
+    6. finalize: Save to database
 
     Returns:
         Compiled LangGraph workflow
@@ -478,14 +495,23 @@ def create_wiki_workflow():
 
     # Add nodes
     builder.add_node("extract_structure", extract_structure_node)
-    builder.add_node("generate_pages", generate_pages_node)
+    builder.add_node("generate_single_page", generate_single_page_node)  # Worker node
     builder.add_node("aggregate", aggregate_node)
     builder.add_node("finalize", finalize_node)
 
-    # Add edges - simple sequential flow
+    # Edges
     builder.add_edge(START, "extract_structure")
-    builder.add_edge("extract_structure", "generate_pages")
-    builder.add_edge("generate_pages", "aggregate")
+
+    # Fan-out: conditional edge that returns Send objects or routes to aggregate
+    builder.add_conditional_edges(
+        "extract_structure",
+        should_fan_out,
+        ["generate_single_page", "aggregate"]
+    )
+
+    # Fan-in: all workers converge to aggregate
+    builder.add_edge("generate_single_page", "aggregate")
+
     builder.add_edge("aggregate", "finalize")
     builder.add_edge("finalize", END)
 

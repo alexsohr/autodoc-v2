@@ -12,7 +12,6 @@ from src.agents.wiki_workflow import (
     WikiWorkflowState,
     create_wiki_workflow,
     extract_structure_node,
-    generate_pages_node,
     aggregate_node,
     finalize_node,
     _convert_llm_structure_to_wiki_structure,
@@ -104,7 +103,6 @@ def sample_wiki_structure():
     ]
 
     return WikiStructure(
-        id="wiki-test123",
         repository_id=uuid4(),
         title="Test Project Wiki",
         description="Documentation for test project",
@@ -245,105 +243,6 @@ class TestExtractStructureNode:
             assert result["current_step"] == "error"
             assert result["error"] is not None
             assert "Structure extraction failed" in result["error"]
-
-
-class TestGeneratePagesNode:
-    """Test the generate_pages workflow node."""
-
-    @pytest.mark.integration
-    @pytest.mark.anyio
-    async def test_generate_pages_success(
-        self, sample_initial_state, sample_wiki_structure
-    ):
-        """Test successful page content generation."""
-        state_with_structure = {
-            **sample_initial_state,
-            "structure": sample_wiki_structure,
-            "current_step": "structure_extracted",
-        }
-
-        mock_agent = MagicMock()
-        mock_agent.ainvoke = AsyncMock(
-            return_value={
-                "messages": [
-                    MagicMock(content="# Getting Started\n\nThis is the generated content.")
-                ]
-            }
-        )
-
-        with patch(
-            "src.agents.wiki_workflow.create_page_agent",
-            new_callable=AsyncMock,
-            return_value=mock_agent,
-        ) as mock_create_agent:
-            result = await generate_pages_node(state_with_structure)
-
-            # Verify agent was created and called for each page (2 pages)
-            mock_create_agent.assert_called_once()
-            assert mock_agent.ainvoke.call_count == 2
-
-            assert result["current_step"] == "pages_generated"
-            assert result.get("error") is None
-            assert len(result["pages"]) == 2
-            assert result["pages"][0].content == "# Getting Started\n\nThis is the generated content."
-
-    @pytest.mark.integration
-    @pytest.mark.anyio
-    async def test_generate_pages_with_existing_error(self, sample_initial_state):
-        """Test generate_pages preserves existing error state."""
-        state_with_error = {
-            **sample_initial_state,
-            "error": "Previous error",
-            "current_step": "error",
-        }
-
-        result = await generate_pages_node(state_with_error)
-
-        assert result["current_step"] == "error"
-        assert result["error"] == "Previous error"
-
-    @pytest.mark.integration
-    @pytest.mark.anyio
-    async def test_generate_pages_no_structure(self, sample_initial_state):
-        """Test generate_pages handles missing structure."""
-        result = await generate_pages_node(sample_initial_state)
-
-        assert result["current_step"] == "error"
-        assert result["error"] == "No structure available"
-
-    @pytest.mark.integration
-    @pytest.mark.anyio
-    async def test_generate_pages_handles_page_error(
-        self, sample_initial_state, sample_wiki_structure
-    ):
-        """Test generate_pages continues on individual page errors."""
-        state_with_structure = {
-            **sample_initial_state,
-            "structure": sample_wiki_structure,
-            "current_step": "structure_extracted",
-        }
-
-        mock_agent = MagicMock()
-        mock_agent.ainvoke = AsyncMock(
-            side_effect=Exception("Page generation error")
-        )
-
-        with patch(
-            "src.agents.wiki_workflow.create_page_agent",
-            new_callable=AsyncMock,
-            return_value=mock_agent,
-        ) as mock_create_agent:
-            result = await generate_pages_node(state_with_structure)
-
-            # Verify agent was created and called for each page
-            mock_create_agent.assert_called_once()
-            assert mock_agent.ainvoke.call_count == 2
-
-            assert result["current_step"] == "pages_generated"
-            # Pages should be generated but with error content
-            assert len(result["pages"]) == 2
-            for page in result["pages"]:
-                assert "Error generating content" in page.content
 
 
 class TestAggregateNode:
@@ -545,7 +444,8 @@ class TestFullWorkflowIntegration:
             # Verify agents were created and called
             mock_create_structure.assert_called_once()
             mock_structure_agent.ainvoke.assert_called_once()
-            mock_create_page.assert_called_once()
+            # Fan-out pattern: create_page_agent called once per page (2 pages)
+            assert mock_create_page.call_count == 2
             # Page agent called for each page (2 pages in the mock structure)
             assert mock_page_agent.ainvoke.call_count == 2
 
@@ -634,7 +534,8 @@ class TestFullWorkflowIntegration:
             # Verify agents were called
             mock_create_structure.assert_called_once()
             mock_structure_agent.ainvoke.assert_called_once()
-            mock_create_page.assert_called_once()
+            # Fan-out pattern: create_page_agent called once per page (2 pages)
+            assert mock_create_page.call_count == 2
             # Page agent called for each page (2 pages), but all fail
             assert mock_page_agent.ainvoke.call_count == 2
 
@@ -697,7 +598,8 @@ class TestFullWorkflowIntegration:
             # Verify all agents and repository were called (proves all nodes executed)
             mock_create_structure.assert_called_once()
             mock_structure_agent.ainvoke.assert_called_once()
-            mock_create_page.assert_called_once()
+            # Fan-out pattern: create_page_agent called once per page (2 pages)
+            assert mock_create_page.call_count == 2
             # Page agent called for each page (2 pages in the mock structure)
             assert mock_page_agent.ainvoke.call_count == 2
             mock_repo.upsert.assert_called_once()

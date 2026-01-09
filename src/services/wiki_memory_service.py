@@ -10,6 +10,8 @@ import logging
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 from ..models.wiki_memory import MemoryType, WikiMemory
 from ..repository.wiki_memory_repository import WikiMemoryRepository
 from ..tools.embedding_tool import EmbeddingTool
@@ -17,8 +19,10 @@ from ..utils.config_loader import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Maximum characters for memory content
+# Maximum characters for memory content chunk
 MAX_MEMORY_CHARS = 4000
+# Overlap between chunks for context continuity
+CHUNK_OVERLAP = 200
 
 
 class WikiMemoryService:
@@ -53,11 +57,11 @@ class WikiMemoryService:
         file_paths: Optional[List[str]] = None,
         related_pages: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Store a new memory with vector embedding.
+        """Store memory, splitting into multiple records if content exceeds limit.
 
-        Creates a new WikiMemory document with the provided content and metadata.
-        Content is truncated to MAX_MEMORY_CHARS if necessary, and a vector
-        embedding is generated for semantic search.
+        Creates WikiMemory documents with vector embeddings. If content exceeds
+        MAX_MEMORY_CHARS, it is split into overlapping chunks using
+        RecursiveCharacterTextSplitter, with each chunk stored as a separate record.
 
         Args:
             repository_id: UUID of the repository this memory belongs to.
@@ -68,49 +72,65 @@ class WikiMemoryService:
             related_pages: Optional list of related wiki page identifiers.
 
         Returns:
-            Dict with status and memory details on success, or error information.
+            Dict with status, memory_ids list, and chunks_created count on success,
+            or error information on failure.
         """
         try:
-            # Truncate content if necessary
-            truncated_content = content[:MAX_MEMORY_CHARS] if len(content) > MAX_MEMORY_CHARS else content
-
-            # Generate embedding for the content
-            embedding = await self._embedding_tool.get_embedding_for_query(truncated_content)
-            if embedding is None:
-                logger.warning(
-                    f"Failed to generate embedding for memory in repository {repository_id}"
+            # Split content into chunks if needed
+            if len(content) > MAX_MEMORY_CHARS:
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=MAX_MEMORY_CHARS,
+                    chunk_overlap=CHUNK_OVERLAP,
+                    length_function=len,
                 )
-                # Store memory without embedding rather than failing completely
-                embedding = []
+                chunks = text_splitter.split_text(content)
+                logger.info(
+                    f"Split memory content into {len(chunks)} chunks for repository {repository_id}"
+                )
+            else:
+                chunks = [content]
 
-            # Create WikiMemory instance
-            memory = WikiMemory(
-                repository_id=repository_id,
-                memory_type=memory_type,
-                content=truncated_content,
-                embedding=embedding,
-                source_agent=source_agent,
-                file_paths=file_paths or [],
-                related_pages=related_pages or [],
-                embedding_metadata={
-                    "model": "text-embedding-3-small",
-                    "dimension": len(embedding) if embedding else 0,
-                    "truncated": len(content) > MAX_MEMORY_CHARS,
-                    "original_length": len(content),
-                },
-            )
+            memory_ids = []
+            for i, chunk in enumerate(chunks):
+                # Generate embedding for this chunk
+                embedding = await self._embedding_tool.get_embedding_for_query(chunk)
+                if embedding is None:
+                    logger.warning(
+                        f"Failed to generate embedding for chunk {i} in repository {repository_id}"
+                    )
+                    embedding = []
 
-            # Insert via repository
-            inserted_memory = await self._wiki_memory_repo.insert(memory)
+                # Create WikiMemory for this chunk
+                memory = WikiMemory(
+                    repository_id=repository_id,
+                    memory_type=memory_type,
+                    content=chunk,
+                    embedding=embedding,
+                    source_agent=source_agent,
+                    file_paths=file_paths or [],
+                    related_pages=related_pages or [],
+                    embedding_metadata={
+                        "model": "text-embedding-3-small",
+                        "dimension": len(embedding) if embedding else 0,
+                        "chunk_index": i,
+                        "total_chunks": len(chunks),
+                        "original_length": len(content),
+                    },
+                )
+
+                # Repository handles insert + ChromaDB sync
+                inserted = await self._wiki_memory_repo.insert(memory)
+                memory_ids.append(str(inserted.id))
 
             logger.info(
-                f"Stored memory {inserted_memory.id} for repository {repository_id}, "
+                f"Stored {len(memory_ids)} memory chunks for repository {repository_id}, "
                 f"type={memory_type.value}, source={source_agent}"
             )
 
             return {
                 "status": "success",
-                "memory_id": str(inserted_memory.id),
+                "memory_ids": memory_ids,
+                "chunks_created": len(chunks),
                 "repository_id": str(repository_id),
             }
 
@@ -157,7 +177,7 @@ class WikiMemoryService:
                     "count": 0,
                 }
 
-            # Perform vector search
+            # Perform vector search (repository handles Atlas/ChromaDB fallback)
             memories = await self._wiki_memory_repo.vector_search(
                 repository_id=repository_id,
                 query_embedding=query_embedding,
@@ -248,7 +268,8 @@ class WikiMemoryService:
     async def purge_memories(self, repository_id: UUID) -> Dict[str, Any]:
         """Delete all memories for a specific repository.
 
-        Removes all WikiMemory documents associated with the given repository.
+        Removes all WikiMemory documents associated with the given repository
+        from both MongoDB and ChromaDB (handled by repository).
         Used during repository re-processing or cleanup.
 
         Args:
@@ -258,7 +279,7 @@ class WikiMemoryService:
             Dict with status and count of deleted memories, or error information.
         """
         try:
-            # Delete all memories for the repository
+            # Repository handles deletion from both MongoDB and ChromaDB
             deleted_count = await self._wiki_memory_repo.delete_by_repository(
                 repository_id=repository_id
             )

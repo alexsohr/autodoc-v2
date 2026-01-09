@@ -9,4 +9,4 @@ data
 .mcp.json
 .langgraph_api
 logs/**
-docs/**
+.chroma/

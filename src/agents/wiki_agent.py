@@ -20,6 +20,9 @@ from ..repository.wiki_structure_repository import WikiStructureRepository
 
 logger = structlog.get_logger(__name__)
 
+# Maximum concurrent page generation workers to prevent API rate limiting
+MAX_PAGE_GENERATION_CONCURRENCY = 5
+
 
 class WikiGenerationState(TypedDict):
     """State for wiki generation workflow.
@@ -37,7 +40,8 @@ class WikiGenerationState(TypedDict):
     start_time: str
     messages: List[BaseMessage]
     clone_path: Optional[str]  # Path to cloned repository for file access
-
+    force_regenerate: bool  # Whether to force regeneration even if wiki exists
+    
 
 class WikiGenerationAgent:
     """LangGraph agent for wiki generation workflows.
@@ -117,19 +121,7 @@ class WikiGenerationAgent:
             Dictionary with wiki generation results
         """
         try:
-            # Check if wiki already exists
-            if not force_regenerate:
-                existing_wiki = await self._wiki_structure_repo.find_one(
-                    {"repository_id": repository_id}
-                )
-                if existing_wiki:
-                    return {
-                        "status": "exists",
-                        "message": "Wiki already exists for this repository",
-                        "id": str(existing_wiki.id),
-                    }
-
-            # Initialize state
+            # Initialize state - wiki existence check is now a workflow node
             initial_state: WikiGenerationState = {
                 "repository_id": repository_id,
                 "file_tree": file_tree,
@@ -145,7 +137,7 @@ class WikiGenerationAgent:
                     )
                 ],
                 "clone_path": None,  # Will be set in _generate_wiki_node
-            }
+                "force_regenerate": force_regenerate            }
 
             # Execute workflow
             result = await self.workflow.ainvoke(initial_state)
@@ -281,16 +273,19 @@ class WikiGenerationAgent:
                 "pages": [],
                 "error": None,
                 "current_step": "init",
+                "force_regenerate": state.get("force_regenerate", False),
             }
 
             logger.info(
                 "Running wiki_workflow",
                 repository_id=state["repository_id"],
                 clone_path=str(clone_path),
+                max_concurrency=MAX_PAGE_GENERATION_CONCURRENCY,
             )
 
-            # Invoke workflow
-            result = await wiki_workflow.ainvoke(workflow_state)
+            # Invoke workflow with concurrency limit to prevent API rate limiting
+            config = {"configurable": {"max_concurrency": MAX_PAGE_GENERATION_CONCURRENCY}}
+            result = await wiki_workflow.ainvoke(workflow_state, config=config)
 
             if result.get("error"):
                 state["error_message"] = result["error"]
@@ -460,13 +455,9 @@ class WikiGenerationAgent:
                 sections=wiki_sections,
             )
 
-            # Delete existing wiki if force regenerating
-            await self._wiki_structure_repo.delete_one(
-                {"repository_id": UUID(state["repository_id"])}
-            )
-
-            # Store new wiki
-            await self._wiki_structure_repo.insert(wiki_structure)
+            # NOTE: wiki_workflow.finalize_node already saved to DB via upsert()
+            # We skip redundant save here to avoid duplicate documents
+            # This node now only builds the structure for state compatibility
 
             state["progress"] = 100.0
 
