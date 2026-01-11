@@ -6,7 +6,7 @@ generation. Memories enable cross-referencing, pattern recognition, and
 maintaining structural decisions across agent runs.
 """
 
-import logging
+import structlog
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -17,7 +17,7 @@ from ..repository.wiki_memory_repository import WikiMemoryRepository
 from ..tools.embedding_tool import EmbeddingTool
 from ..utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Maximum characters for memory content chunk
 MAX_MEMORY_CHARS = 4000

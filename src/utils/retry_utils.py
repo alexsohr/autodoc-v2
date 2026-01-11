@@ -7,7 +7,7 @@ Also includes LangGraph RetryPolicy factories for agent node retry configuration
 """
 
 import asyncio
-import logging
+import structlog
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
@@ -23,7 +23,7 @@ from tenacity import (
 )
 from tenacity.asyncio import AsyncRetrying
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class RetryConfig:

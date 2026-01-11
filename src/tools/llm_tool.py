@@ -6,7 +6,7 @@ language model operations including text generation, chat, and streaming.
 
 import asyncio
 import json
-import logging
+import structlog
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from ..models.config import LLMConfig, LLMProvider
 from ..utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class LLMGenerateInput(BaseModel):

@@ -4,7 +4,7 @@ This module provides comprehensive error handling middleware with
 structured error responses, logging, and monitoring integration.
 """
 
-import logging
+import structlog
 import traceback
 import uuid
 from datetime import datetime, timezone

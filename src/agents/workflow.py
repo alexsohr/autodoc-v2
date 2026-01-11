@@ -4,25 +4,22 @@ This module implements the main workflow orchestration that coordinates
 document processing, wiki generation, and other AI-powered workflows.
 """
 
-import asyncio
-import logging
+import structlog
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from ..models.repository import AnalysisStatus, Repository
+from ..models.repository import AnalysisStatus
 from ..repository.code_document_repository import CodeDocumentRepository
 from ..repository.repository_repository import RepositoryRepository
-from ..repository.wiki_structure_repository import WikiStructureRepository
 from ..tools.context_tool import ContextTool
 from ..tools.embedding_tool import EmbeddingTool
 from ..tools.llm_tool import LLMTool
-from ..tools.repository_tool import RepositoryTool
 
 # Import TYPE_CHECKING to avoid circular imports
 from typing import TYPE_CHECKING
@@ -30,8 +27,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..agents.document_agent import DocumentProcessingAgent
     from ..agents.wiki_agent import WikiGenerationAgent
+    from ..services.wiki_service import WikiGenerationService
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class WorkflowType(str, Enum):
@@ -73,42 +71,41 @@ class WorkflowOrchestrator:
         context_tool: ContextTool,
         embedding_tool: EmbeddingTool,
         llm_tool: LLMTool,
-        repository_tool: RepositoryTool,
         repository_repo: RepositoryRepository,
         code_document_repo: CodeDocumentRepository,
-        wiki_structure_repo: WikiStructureRepository,
         document_agent: "DocumentProcessingAgent",
         wiki_agent: "WikiGenerationAgent",
+        wiki_service: "WikiGenerationService",
     ):
         """Initialize workflow orchestrator with dependency injection.
-        
+
         Args:
             context_tool: ContextTool instance (injected via DI).
             embedding_tool: EmbeddingTool instance (injected via DI).
             llm_tool: LLMTool instance (injected via DI).
-            repository_tool: RepositoryTool instance (injected via DI).
             repository_repo: RepositoryRepository instance (injected via DI).
             code_document_repo: CodeDocumentRepository instance (injected via DI).
-            wiki_structure_repo: WikiStructureRepository instance (injected via DI).
             document_agent: DocumentProcessingAgent instance (injected via DI).
             wiki_agent: WikiGenerationAgent instance (injected via DI).
+            wiki_service: WikiGenerationService instance (injected via DI).
         """
         self.memory = MemorySaver()
-        
+
         # Tool dependencies
         self._context_tool = context_tool
         self._embedding_tool = embedding_tool
         self._llm_tool = llm_tool
-        self._repository_tool = repository_tool
-        
+
         # Repository dependencies
         self._repository_repo = repository_repo
         self._code_document_repo = code_document_repo
-        self._wiki_structure_repo = wiki_structure_repo
-        
+
         # Agent dependencies
         self._document_agent = document_agent
         self._wiki_agent = wiki_agent
+
+        # Service dependencies
+        self._wiki_service = wiki_service
         
         self.workflows = self._create_workflows()
 
@@ -116,6 +113,7 @@ class WorkflowOrchestrator:
         self.workflow_stages = {
             WorkflowType.FULL_ANALYSIS: [
                 "validate_repository",
+                "check_existing_wiki",
                 "process_documents",
                 "generate_wiki",
                 "finalize",
@@ -180,6 +178,7 @@ class WorkflowOrchestrator:
 
         # Add nodes
         workflow.add_node("validate_repository", self._validate_repository_node)
+        workflow.add_node("check_existing_wiki", self._check_existing_wiki_node)
         workflow.add_node("process_documents", self._process_documents_node)
         workflow.add_node("generate_wiki", self._generate_wiki_node)
         workflow.add_node("finalize", self._finalize_node)
@@ -187,13 +186,26 @@ class WorkflowOrchestrator:
 
         # Define edges
         workflow.add_edge(START, "validate_repository")
-        workflow.add_edge("validate_repository", "process_documents")
+        workflow.add_edge("validate_repository", "check_existing_wiki")
+
+        # Conditional edge: route based on wiki check result
+        workflow.add_conditional_edges(
+            "check_existing_wiki",
+            self._route_after_wiki_check,
+            {
+                "continue": "process_documents",
+                "error": "handle_error",
+            }
+        )
+
         workflow.add_edge("process_documents", "generate_wiki")
         workflow.add_edge("generate_wiki", "finalize")
         workflow.add_edge("finalize", END)
         workflow.add_edge("handle_error", END)
 
-        app = workflow.compile(checkpointer=self.memory).with_config({"run_name": "workflow.full_analysis_workflow"})
+        app = workflow.compile(checkpointer=self.memory).with_config(
+            {"run_name": "workflow.full_analysis_workflow"}
+        )
         logger.debug(f"Full analysis workflow:\n {app.get_graph().draw_mermaid()}")
         return app
 
@@ -394,6 +406,52 @@ class WorkflowOrchestrator:
             state["error_message"] = f"Repository validation failed: {str(e)}"
             return state
 
+    def _route_after_wiki_check(self, state: WorkflowState) -> str:
+        """Route based on wiki check result.
+
+        Returns:
+            "continue" to proceed with document processing
+            "error" to route to error handling
+        """
+        if state.get("error_message"):
+            return "error"
+        return "continue"
+
+    async def _check_existing_wiki_node(self, state: WorkflowState) -> WorkflowState:
+        """Check for existing wiki and handle force_update flag.
+
+        If force_update is True: deletes existing WikiStructure via WikiService and continues.
+        If force_update is False and wiki exists: sets error and routes to handle_error.
+        If force_update is False and wiki doesn't exist: continues normally.
+        """
+        try:
+            state["current_stage"] = "check_existing_wiki"
+            repository_id = UUID(state["repository_id"])
+
+            if state["force_update"]:
+                # Delete existing wiki if present using WikiService
+                deleted = await self._wiki_service.delete_wiki_for_repository(repository_id)
+                if deleted:
+                    logger.info(f"Deleted existing wiki for repository {repository_id}")
+                state["stages_completed"].append("check_existing_wiki")
+            else:
+                # Check existence - error if wiki already exists
+                wiki_exists = await self._wiki_service.wiki_exists_for_repository(repository_id)
+                if wiki_exists:
+                    state["error_message"] = (
+                        f"Wiki already exists for repository {state['repository_id']}. "
+                        "Use force_update=True to regenerate."
+                    )
+                    logger.warning(f"Wiki already exists for repository {state['repository_id']}. Using force_update=True to regenerate.")
+                else:
+                    state["stages_completed"].append("check_existing_wiki")
+                    logger.info("Wiki does not exist for repository %s. Continuing.", state["repository_id"])
+            return state
+
+        except Exception as e:
+            state["error_message"] = f"Wiki check failed: {str(e)}"
+            return state
+
     async def _process_documents_node(self, state: WorkflowState) -> WorkflowState:
         """Process documents node"""
         try:
@@ -473,7 +531,7 @@ class WorkflowOrchestrator:
 
             # Check if wiki already exists (unless force update)
             if not state["force_update"]:
-                existing_wiki = await self._wiki_structure_repo.find_one(
+                existing_wiki = await self._wiki_service.get_wiki_structure(
                     {"repository_id": state["repository_id"]}
                 )
 
@@ -797,7 +855,7 @@ class WorkflowOrchestrator:
                 doc_count = await self._code_document_repo.count(
                     {"repository_id": repository_id}
                 )
-                wiki_exists = await self._wiki_structure_repo.find_one(
+                wiki_exists = await self._wiki_service.get_wiki_structure(
                     {"repository_id": repository_id}
                 )
 
@@ -815,7 +873,7 @@ class WorkflowOrchestrator:
                 status = "completed" if doc_count > 0 else "not_started"
 
             elif workflow_type == WorkflowType.WIKI_GENERATION:
-                wiki_exists = await self._wiki_structure_repo.find_one(
+                wiki_exists = await self._wiki_service.get_wiki_structure(
                     {"repository_id": repository_id}
                 )
                 status = "completed" if wiki_exists else "not_started"

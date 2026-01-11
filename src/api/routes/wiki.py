@@ -4,7 +4,7 @@ This module implements the documentation/wiki API endpoints
 based on the documentation_api.yaml contract specification.
 """
 
-import logging
+import structlog
 from typing import Optional
 from uuid import UUID
 
@@ -18,7 +18,7 @@ from ...models.user import User
 from ...services.document_service import DocumentProcessingService
 from ...services.wiki_service import WikiGenerationService
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/repositories", tags=["wiki"])
 

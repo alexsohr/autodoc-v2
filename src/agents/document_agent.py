@@ -6,9 +6,9 @@ repository analysis, file processing, and content preparation for embedding.
 
 import fnmatch
 import json
-import logging
 import os
 import shutil
+import structlog
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
@@ -22,7 +22,7 @@ from ..repository.repository_repository import RepositoryRepository
 from ..tools.repository_tool import RepositoryTool
 from ..utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Hardcoded patterns for documentation files to extract
 DOC_FILE_PATTERNS = [

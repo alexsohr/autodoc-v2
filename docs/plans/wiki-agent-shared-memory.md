@@ -196,7 +196,7 @@ from ..repository.wiki_memory_repository import WikiMemoryRepository
 from ..tools.embedding_tool import EmbeddingTool
 from ..utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 MAX_MEMORY_CHARS = 4000
 

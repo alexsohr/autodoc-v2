@@ -5,7 +5,7 @@ vector embeddings for semantic search capabilities.
 """
 
 import asyncio
-import logging
+import structlog
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -21,7 +21,7 @@ from ..models.config import LLMProvider
 from ..repository.code_document_repository import CodeDocumentRepository
 from ..utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class EmbeddingGenerateInput(BaseModel):
