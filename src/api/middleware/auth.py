@@ -4,7 +4,7 @@ This module provides authentication middleware for JWT token validation
 and user context management across API requests.
 """
 
-import logging
+import structlog
 from typing import List, Optional
 from uuid import UUID
 
@@ -17,7 +17,7 @@ from ...models.user import TokenData, User
 from ...services.auth_service import AuthenticationService
 from ...utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Security scheme for JWT tokens
 security = HTTPBearer(auto_error=False)

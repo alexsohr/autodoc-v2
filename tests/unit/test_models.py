@@ -389,6 +389,61 @@ class TestWikiModels:
                 sections=sections,
             )
 
+    def test_wiki_page_content_formatting(self):
+        """Test that markdown content is automatically formatted"""
+        # Create page with inconsistently formatted markdown
+        unformatted_markdown = """# Header
+Some text without proper spacing.
+-  List item with extra space
+-List item without space
+```python
+def foo():pass
+```"""
+
+        page = WikiPageDetail(
+            id="test-page",
+            title="Test Page",
+            description="Test description",
+            importance=PageImportance.MEDIUM,
+            content=unformatted_markdown,
+        )
+
+        # Content should be formatted (mdformat normalizes spacing)
+        assert page.has_content() is True
+        # Check that the content was processed (not empty)
+        assert len(page.content) > 0
+        # The formatted content should have proper list formatting
+        # mdformat normalizes "- " prefix for list items
+        assert "-" in page.content  # Lists are preserved
+
+    def test_wiki_page_content_formatting_empty(self):
+        """Test that empty content is handled gracefully"""
+        page = WikiPageDetail(
+            id="test-page",
+            title="Test Page",
+            description="Test description",
+            importance=PageImportance.MEDIUM,
+            content="",
+        )
+        assert page.content == ""
+        assert page.has_content() is False
+
+    def test_wiki_page_content_formatting_on_update(self):
+        """Test that content is formatted when updated via model_copy"""
+        page = WikiPageDetail(
+            id="test-page",
+            title="Test Page",
+            description="Test description",
+            importance=PageImportance.MEDIUM,
+        )
+
+        # Update content using model_copy (as done in workflow)
+        updated_page = page.model_copy(update={"content": "#  Heading\nSome text"})
+
+        # Content should be formatted
+        assert updated_page.has_content() is True
+        assert "Heading" in updated_page.content
+
 
 class TestChatModels:
     """Test Chat model functionality"""

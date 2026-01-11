@@ -8,7 +8,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-import logging
+import structlog
 from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 from langchain.agents.middleware import AgentMiddleware
@@ -17,7 +17,7 @@ from typing_extensions import NotRequired
 
 from ...models.wiki_memory import MemoryType
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class WikiMemoryState(AgentState):

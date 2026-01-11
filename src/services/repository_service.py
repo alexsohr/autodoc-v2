@@ -5,7 +5,7 @@ CRUD operations, webhook configuration, and analysis workflow coordination.
 """
 
 import asyncio
-import logging
+import structlog
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,7 +25,7 @@ from ..repository.code_document_repository import CodeDocumentRepository
 from ..repository.repository_repository import RepositoryRepository
 from ..utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class RepositoryService:

@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
+import mdformat
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pymongo import TEXT, IndexModel
 
@@ -103,6 +104,26 @@ class WikiPageDetail(BaseModel):
             validated_pages.append(page_id.strip())
 
         return validated_pages
+
+    @field_validator("content", mode="after")
+    @classmethod
+    def format_markdown_content(cls, v: str) -> str:
+        """Format markdown content for consistency.
+
+        Uses mdformat to normalize markdown formatting, ensuring consistent
+        output regardless of LLM generation variations.
+        """
+        if not v or not v.strip():
+            return v
+
+        try:
+            # Format with GFM (GitHub Flavored Markdown) support
+            # mdformat-gfm plugin is auto-detected when installed
+            return mdformat.text(v)
+        except Exception:
+            # If formatting fails for any reason, return original content
+            # This ensures the workflow doesn't break due to formatting issues
+            return v
 
     def add_file_path(self, file_path: str) -> None:
         """Add a file path to this page"""

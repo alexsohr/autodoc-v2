@@ -36,9 +36,15 @@ class _SerializerMixin:
         "session_id",
         "repository_id",
         check_fields=False,
+        when_used="json",
     )
     def serialize_uuid(self, value: UUID) -> str | None:
-        """Serialize UUID fields to canonical string representations."""
+        """Serialize UUID fields to string for JSON API responses only.
+
+        Uses when_used='json' so that:
+        - JSON output (API responses): UUIDs are converted to strings for readability
+        - Python output (database storage): UUIDs remain as native UUID objects
+        """
         if isinstance(value, UUID):
             return str(value)
         return value

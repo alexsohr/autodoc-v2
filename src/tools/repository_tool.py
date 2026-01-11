@@ -5,7 +5,7 @@ Git repositories as part of LangGraph workflows.
 """
 
 import asyncio
-import logging
+import structlog
 import os
 import shutil
 import subprocess
@@ -24,7 +24,7 @@ from ..models.repository import AnalysisStatus, Repository, RepositoryProvider
 from ..utils.config_loader import get_settings
 from ..utils.storage_adapters import StorageAdapterFactory
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class RepositoryCloneInput(BaseModel):

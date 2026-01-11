@@ -5,7 +5,7 @@ and context gathering for RAG (Retrieval-Augmented Generation) workflows.
 """
 
 import asyncio
-import logging
+import structlog
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from ..repository.code_document_repository import CodeDocumentRepository
 from ..tools.embedding_tool import EmbeddingTool
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ContextSearchInput(BaseModel):

@@ -7,11 +7,11 @@ Git providers including GitHub, Bitbucket, and GitLab.
 import hashlib
 import hmac
 import json
-import logging
+import structlog
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class WebhookProvider(str, Enum):

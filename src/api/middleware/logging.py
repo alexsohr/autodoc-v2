@@ -4,7 +4,7 @@ This module provides comprehensive request logging middleware with
 structured logging, correlation IDs, and performance monitoring.
 """
 
-import logging
+import structlog
 import time
 import uuid
 from datetime import datetime, timezone

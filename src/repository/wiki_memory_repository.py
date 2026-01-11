@@ -9,7 +9,7 @@ Provides data access methods for WikiMemory entities including:
 
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import UUID
 
@@ -21,7 +21,7 @@ from .base import BaseRepository
 if TYPE_CHECKING:
     import chromadb
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Global ChromaDB client (lazy initialized)
 _chroma_client: Optional["chromadb.ClientAPI"] = None

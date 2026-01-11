@@ -5,7 +5,7 @@ Git providers based on the repository_api.yaml contract specification.
 """
 
 import json
-import logging
+import structlog
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -15,7 +15,7 @@ from ...dependencies import get_repository_service
 from ...services.repository_service import RepositoryService
 from ...utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 

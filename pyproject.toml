@@ -55,6 +55,8 @@ dependencies = [
     "langchain-mcp-adapters>=0.1.0",
     "deepagents>=0.2.0",
     "chromadb>=0.4.0",
+    "mdformat>=0.7.0",
+    "mdformat-gfm>=0.3.0",  # GitHub Flavored Markdown support
 ]
 
 [project.optional-dependencies]

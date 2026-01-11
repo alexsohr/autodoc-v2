@@ -5,7 +5,7 @@ question answering, and conversational AI capabilities.
 """
 
 import asyncio
-import logging
+import structlog
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -31,7 +31,7 @@ from ..tools.context_tool import ContextTool
 from ..tools.llm_tool import LLMTool
 from ..utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ChatService:

@@ -244,27 +244,25 @@ def get_workflow_orchestrator(
     context_tool: Annotated[ContextTool, Depends(get_context_tool)],
     embedding_tool: Annotated[EmbeddingTool, Depends(get_embedding_tool)],
     llm_tool: Annotated[LLMTool, Depends(get_llm_tool)],
-    repository_tool: Annotated[RepositoryTool, Depends(get_repository_tool)],
     repository_repo: Annotated[RepositoryRepository, Depends(get_repository_repo)],
     code_document_repo: Annotated[CodeDocumentRepository, Depends(get_code_document_repo)],
-    wiki_structure_repo: Annotated[WikiStructureRepository, Depends(get_wiki_structure_repo)],
     document_agent: Annotated[DocumentProcessingAgent, Depends(get_document_agent)],
     wiki_agent: Annotated[WikiGenerationAgent, Depends(get_wiki_agent)],
+    wiki_service: Annotated[WikiGenerationService, Depends(get_wiki_service)],
 ) -> WorkflowOrchestrator:
     """Get WorkflowOrchestrator instance with injected dependencies.
-    
+
     FastAPI will cache this per request automatically.
     """
     return WorkflowOrchestrator(
         context_tool=context_tool,
         embedding_tool=embedding_tool,
         llm_tool=llm_tool,
-        repository_tool=repository_tool,
         repository_repo=repository_repo,
         code_document_repo=code_document_repo,
-        wiki_structure_repo=wiki_structure_repo,
         document_agent=document_agent,
         wiki_agent=wiki_agent,
+        wiki_service=wiki_service,
     )
 
 

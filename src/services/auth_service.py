@@ -4,7 +4,7 @@ This module provides authentication and authorization services
 including JWT token management, user validation, and security utilities.
 """
 
-import logging
+import structlog
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -16,7 +16,7 @@ from ..models.user import Token, TokenData, User, UserCreate, UserLogin, UserUpd
 from ..repository.user_repository import UserRepository
 from ..utils.config_loader import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class AuthenticationService:

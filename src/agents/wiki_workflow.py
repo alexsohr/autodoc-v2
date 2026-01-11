@@ -328,7 +328,9 @@ async def generate_single_page_node(state: PageGenerationState) -> Dict[str, Any
             "messages": [{"role": "user", "content": user_message}],
             "repository_id": repository_id,
         })
-        content = result.get("generated_content", "")
+        # Extract content from structured_response (PageContentResponse schema)
+        structured = result.get("structured_response")
+        content = structured.content if structured else ""
 
         if not content:
             logger.warning("No content generated", page_id=page.id)
