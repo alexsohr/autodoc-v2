@@ -2,15 +2,16 @@
 """Tests for wiki workflow including fan-out/fan-in pattern."""
 
 import pytest
+from langgraph.types import Send
+
 from src.agents.wiki_workflow import (
-    WikiWorkflowState,
     PageGenerationState,
+    WikiWorkflowState,
     fan_out_to_page_workers,
     generate_single_page_node,
     should_fan_out,
 )
-from src.models.wiki import WikiStructure, WikiPageDetail, WikiSection, PageImportance
-from langgraph.types import Send
+from src.models.wiki import PageImportance, WikiPageDetail, WikiSection, WikiStructure
 
 
 def test_wiki_workflow_state_structure():
@@ -34,6 +35,7 @@ def test_wiki_workflow_state_structure():
 def test_wiki_workflow_state_with_structure():
     """WikiWorkflowState should accept WikiStructure for structure field."""
     from uuid import uuid4
+
     from src.models.wiki import WikiSection
 
     # Create a minimal wiki structure
@@ -122,7 +124,15 @@ def test_wiki_workflow_state_error_handling():
 
 def test_wiki_workflow_state_current_step_tracking():
     """WikiWorkflowState should track current workflow step for observability."""
-    valid_steps = ["init", "structure_extracted", "generating_pages", "page_generated", "finalizing", "complete", "error"]
+    valid_steps = [
+        "init",
+        "structure_extracted",
+        "generating_pages",
+        "page_generated",
+        "finalizing",
+        "complete",
+        "error",
+    ]
 
     for step in valid_steps:
         state = WikiWorkflowState(
@@ -148,6 +158,7 @@ def test_wiki_workflow_state_current_step_tracking():
 async def test_extract_structure_node_success():
     """extract_structure_node should return structure from React agent."""
     from unittest.mock import AsyncMock, patch
+
     from src.agents.wiki_workflow import extract_structure_node
     from src.models.wiki import PageImportance
 
@@ -182,16 +193,16 @@ async def test_extract_structure_node_success():
                         "importance": "high",
                         "file_paths": ["src/main.py"],
                     }
-                ]
+                ],
             }
-        ]
+        ],
     }
 
     with patch("src.agents.wiki_workflow.create_structure_agent") as mock_create:
         mock_agent = AsyncMock()
         mock_agent.ainvoke.return_value = {
             "messages": [],
-            "structured_response": mock_structured_response
+            "structured_response": mock_structured_response,
         }
         mock_create.return_value = mock_agent
 
@@ -204,13 +215,16 @@ async def test_extract_structure_node_success():
         assert len(result["structure"].sections) == 1
         assert result["structure"].sections[0].id == "overview"
         assert len(result["structure"].sections[0].pages) == 1
-        assert result["structure"].sections[0].pages[0].importance == PageImportance.HIGH
+        assert (
+            result["structure"].sections[0].pages[0].importance == PageImportance.HIGH
+        )
 
 
 @pytest.mark.asyncio
 async def test_extract_structure_node_error():
     """extract_structure_node should handle agent errors gracefully."""
     from unittest.mock import AsyncMock, patch
+
     from src.agents.wiki_workflow import extract_structure_node
 
     # Use a valid UUID for repository_id
@@ -249,11 +263,17 @@ async def test_extract_structure_node_error():
 @pytest.mark.asyncio
 async def test_finalize_node_saves_aggregated_structure():
     """Finalize node should save the structure that already has content from aggregate step."""
-    from src.agents.wiki_workflow import finalize_node
-    from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
-    from src.repository.wiki_structure_repository import WikiStructureRepository
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import AsyncMock, patch
     from uuid import UUID
+
+    from src.agents.wiki_workflow import finalize_node
+    from src.models.wiki import (
+        PageImportance,
+        WikiPageDetail,
+        WikiSection,
+        WikiStructure,
+    )
+    from src.repository.wiki_structure_repository import WikiStructureRepository
 
     # Structure with content already merged (from aggregate step)
     structure = WikiStructure(
@@ -275,9 +295,9 @@ async def test_finalize_node_saves_aggregated_structure():
                         file_paths=[],
                         content="# Page 1 Content",  # Already merged by aggregate
                     ),
-                ]
+                ],
             )
-        ]
+        ],
     )
 
     state = {
@@ -291,7 +311,9 @@ async def test_finalize_node_saves_aggregated_structure():
         "current_step": "aggregated",
     }
 
-    with patch.object(WikiStructureRepository, "upsert", new_callable=AsyncMock) as mock_upsert:
+    with patch.object(
+        WikiStructureRepository, "upsert", new_callable=AsyncMock
+    ) as mock_upsert:
         result = await finalize_node(state)
 
     mock_upsert.assert_called_once()
@@ -299,14 +321,15 @@ async def test_finalize_node_saves_aggregated_structure():
     call_kwargs = mock_upsert.call_args.kwargs
     saved_wiki = call_kwargs.get("wiki")
     assert saved_wiki is not None
-    assert saved_wiki.sections[0].pages[0].content == "# Page 1 Content"
+    # mdformat adds trailing newline (CommonMark spec)
+    assert saved_wiki.sections[0].pages[0].content.strip() == "# Page 1 Content"
     assert result.get("current_step") == "completed"
 
 
 @pytest.mark.asyncio
 async def test_finalize_node_with_error_state():
     """finalize_node should return error state if error already exists."""
-    from src.agents.wiki_workflow import finalize_node, WikiWorkflowState
+    from src.agents.wiki_workflow import WikiWorkflowState, finalize_node
 
     state = WikiWorkflowState(
         repository_id="00000000-0000-0000-0000-000000000000",
@@ -328,7 +351,7 @@ async def test_finalize_node_with_error_state():
 @pytest.mark.asyncio
 async def test_finalize_node_no_structure():
     """finalize_node should handle missing structure gracefully."""
-    from src.agents.wiki_workflow import finalize_node, WikiWorkflowState
+    from src.agents.wiki_workflow import WikiWorkflowState, finalize_node
 
     state = WikiWorkflowState(
         repository_id="00000000-0000-0000-0000-000000000000",
@@ -352,8 +375,14 @@ async def test_finalize_node_no_structure():
 async def test_finalize_node_save_failure():
     """finalize_node should handle database save failures gracefully."""
     from unittest.mock import AsyncMock, patch
+
     from src.agents.wiki_workflow import finalize_node
-    from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+    from src.models.wiki import (
+        PageImportance,
+        WikiPageDetail,
+        WikiSection,
+        WikiStructure,
+    )
     from src.repository.wiki_structure_repository import WikiStructureRepository
 
     # Structure with content already merged (from aggregate step)
@@ -373,9 +402,9 @@ async def test_finalize_node_save_failure():
                         importance=PageImportance.HIGH,
                         content="# Page 1 Content",  # Already merged
                     ),
-                ]
+                ],
             )
-        ]
+        ],
     )
 
     state = {
@@ -393,7 +422,7 @@ async def test_finalize_node_save_failure():
         WikiStructureRepository,
         "upsert",
         new_callable=AsyncMock,
-        side_effect=Exception("Database connection failed")
+        side_effect=Exception("Database connection failed"),
     ) as mock_upsert:
         result = await finalize_node(state)
 
@@ -415,7 +444,9 @@ def test_wiki_workflow_compiles():
     assert workflow is not None
     # Check graph has expected nodes for fan-out/fan-in pattern
     assert "extract_structure" in str(workflow.nodes)
-    assert "generate_single_page" in str(workflow.nodes)  # Worker node for parallel generation
+    assert "generate_single_page" in str(
+        workflow.nodes
+    )  # Worker node for parallel generation
     assert "aggregate" in str(workflow.nodes)  # Fan-in node
     assert "finalize" in str(workflow.nodes)
 
@@ -428,8 +459,9 @@ def test_wiki_workflow_compiles():
 @pytest.mark.asyncio
 async def test_extract_structure_node_uses_react_agent():
     """Structure node should invoke React agent with MCP tools."""
+    from unittest.mock import AsyncMock, patch
+
     from src.agents.wiki_workflow import extract_structure_node
-    from unittest.mock import patch, AsyncMock
 
     # Use a valid UUID for repository_id
     test_repo_id = "00000000-0000-0000-0000-000000000001"
@@ -452,8 +484,8 @@ async def test_extract_structure_node_uses_react_agent():
             "structured_response": {
                 "title": "Test Wiki",
                 "description": "Test",
-                "sections": []
-            }
+                "sections": [],
+            },
         }
         mock_create.return_value = mock_agent
 
@@ -467,8 +499,9 @@ async def test_extract_structure_node_uses_react_agent():
 @pytest.mark.asyncio
 async def test_extract_structure_node_no_structured_output():
     """Structure node should handle missing structured_response gracefully."""
+    from unittest.mock import AsyncMock, patch
+
     from src.agents.wiki_workflow import extract_structure_node
-    from unittest.mock import patch, AsyncMock
 
     # Use a valid UUID for repository_id
     test_repo_id = "00000000-0000-0000-0000-000000000002"
@@ -489,7 +522,7 @@ async def test_extract_structure_node_no_structured_output():
         # Agent returns messages but no structured_response
         mock_agent.ainvoke.return_value = {
             "messages": [{"role": "assistant", "content": "I analyzed the repo..."}],
-            "structured_response": None
+            "structured_response": None,
         }
         mock_create.return_value = mock_agent
 
@@ -513,7 +546,9 @@ def test_workflow_includes_aggregate_node():
 
     # Get node names from the graph (nodes is a dict keyed by node name)
     graph = workflow.get_graph()
-    node_names = [name for name in graph.nodes.keys() if name not in ("__start__", "__end__")]
+    node_names = [
+        name for name in graph.nodes.keys() if name not in ("__start__", "__end__")
+    ]
 
     assert "extract_structure" in node_names
     assert "generate_single_page" in node_names
@@ -529,9 +564,15 @@ def test_workflow_includes_aggregate_node():
 @pytest.mark.asyncio
 async def test_aggregate_node_merges_content_into_structure():
     """Aggregate node should merge page content back into structure."""
-    from src.agents.wiki_workflow import aggregate_node
-    from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
     from uuid import UUID
+
+    from src.agents.wiki_workflow import aggregate_node
+    from src.models.wiki import (
+        PageImportance,
+        WikiPageDetail,
+        WikiSection,
+        WikiStructure,
+    )
 
     # Structure without content
     structure = WikiStructure(
@@ -551,9 +592,9 @@ async def test_aggregate_node_merges_content_into_structure():
                         file_paths=[],
                         content="",  # Empty content, not None
                     ),
-                ]
+                ],
             )
-        ]
+        ],
     )
 
     # Pages with generated content
@@ -587,7 +628,8 @@ async def test_aggregate_node_merges_content_into_structure():
     assert updated_structure is not None
     all_pages = updated_structure.get_all_pages()
     assert len(all_pages) == 1
-    assert all_pages[0].content == "# Page 1\n\nThis is the content."
+    # mdformat adds trailing newline (CommonMark spec)
+    assert all_pages[0].content.strip() == "# Page 1\n\nThis is the content."
 
 
 @pytest.mark.asyncio
@@ -638,7 +680,12 @@ async def test_aggregate_node_no_structure():
 async def test_aggregate_node_multiple_pages():
     """Aggregate node should merge content for multiple pages across sections."""
     from src.agents.wiki_workflow import aggregate_node
-    from src.models.wiki import WikiStructure, WikiSection, WikiPageDetail, PageImportance
+    from src.models.wiki import (
+        PageImportance,
+        WikiPageDetail,
+        WikiSection,
+        WikiStructure,
+    )
 
     # Structure with multiple sections and pages
     structure = WikiStructure(
@@ -662,7 +709,7 @@ async def test_aggregate_node_multiple_pages():
                         description="Second",
                         importance=PageImportance.MEDIUM,
                     ),
-                ]
+                ],
             ),
             WikiSection(
                 id="section-2",
@@ -674,9 +721,9 @@ async def test_aggregate_node_multiple_pages():
                         description="Third",
                         importance=PageImportance.LOW,
                     ),
-                ]
-            )
-        ]
+                ],
+            ),
+        ],
     )
 
     # Pages with generated content
@@ -722,11 +769,12 @@ async def test_aggregate_node_multiple_pages():
     assert updated_structure is not None
 
     # Verify all pages have content
+    # mdformat adds trailing newline (CommonMark spec)
     all_pages = updated_structure.get_all_pages()
     assert len(all_pages) == 3
-    assert all_pages[0].content == "# Page 1 Content"
-    assert all_pages[1].content == "# Page 2 Content"
-    assert all_pages[2].content == "# Page 3 Content"
+    assert all_pages[0].content.strip() == "# Page 1 Content"
+    assert all_pages[1].content.strip() == "# Page 2 Content"
+    assert all_pages[2].content.strip() == "# Page 3 Content"
 
     # Verify structure is preserved
     assert len(updated_structure.sections) == 2
@@ -812,9 +860,9 @@ def test_fan_out_to_page_workers_returns_send_list():
                         description="Second page",
                         importance=PageImportance.MEDIUM,
                     ),
-                ]
+                ],
             )
-        ]
+        ],
     )
 
     state = WikiWorkflowState(
@@ -856,9 +904,7 @@ def test_fan_out_to_page_workers_send_contains_correct_state():
         repository_id=str(uuid4()),
         title="Test Wiki",
         description="A test project wiki",
-        sections=[
-            WikiSection(id="intro", title="Introduction", pages=[page])
-        ]
+        sections=[WikiSection(id="intro", title="Introduction", pages=[page])],
     )
 
     state = WikiWorkflowState(
@@ -935,18 +981,33 @@ def test_fan_out_multiple_sections():
                 id="section-1",
                 title="Section 1",
                 pages=[
-                    WikiPageDetail(id="p1", title="P1", description="Page 1", importance=PageImportance.HIGH),
-                ]
+                    WikiPageDetail(
+                        id="p1",
+                        title="P1",
+                        description="Page 1",
+                        importance=PageImportance.HIGH,
+                    ),
+                ],
             ),
             WikiSection(
                 id="section-2",
                 title="Section 2",
                 pages=[
-                    WikiPageDetail(id="p2", title="P2", description="Page 2", importance=PageImportance.MEDIUM),
-                    WikiPageDetail(id="p3", title="P3", description="Page 3", importance=PageImportance.LOW),
-                ]
+                    WikiPageDetail(
+                        id="p2",
+                        title="P2",
+                        description="Page 2",
+                        importance=PageImportance.MEDIUM,
+                    ),
+                    WikiPageDetail(
+                        id="p3",
+                        title="P3",
+                        description="Page 3",
+                        importance=PageImportance.LOW,
+                    ),
+                ],
             ),
-        ]
+        ],
     )
 
     state = WikiWorkflowState(
@@ -996,9 +1057,13 @@ async def test_generate_single_page_node_success():
 
     with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
         mock_agent = AsyncMock()
+        # Mock structured_response with a content attribute (PageContentResponse)
+        from types import SimpleNamespace
+
+        mock_structured = SimpleNamespace(content="# Test Page\n\nThis is the content.")
         mock_agent.ainvoke.return_value = {
             "messages": [],
-            "generated_content": "# Test Page\n\nThis is the content."
+            "structured_response": mock_structured,
         }
         mock_create.return_value = mock_agent
 
@@ -1032,7 +1097,11 @@ async def test_generate_single_page_node_creates_fresh_agent():
 
     with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
         mock_agent = AsyncMock()
-        mock_agent.ainvoke.return_value = {"generated_content": "Content"}
+        # Mock structured_response with a content attribute (PageContentResponse)
+        from types import SimpleNamespace
+
+        mock_structured = SimpleNamespace(content="Content")
+        mock_agent.ainvoke.return_value = {"structured_response": mock_structured}
         mock_create.return_value = mock_agent
 
         await generate_single_page_node(state)
@@ -1096,9 +1165,13 @@ async def test_generate_single_page_node_no_content():
 
     with patch("src.agents.wiki_workflow.create_page_agent") as mock_create:
         mock_agent = AsyncMock()
+        # Mock structured_response with empty content (PageContentResponse)
+        from types import SimpleNamespace
+
+        mock_structured = SimpleNamespace(content="")  # Empty content
         mock_agent.ainvoke.return_value = {
             "messages": [],
-            "generated_content": ""  # Empty content
+            "structured_response": mock_structured,
         }
         mock_create.return_value = mock_agent
 
@@ -1137,7 +1210,11 @@ async def test_generate_single_page_node_with_file_paths():
         async def capture_invoke(invoke_arg):
             nonlocal captured_message
             captured_message = invoke_arg["messages"][0]["content"]
-            return {"generated_content": "# API Reference"}
+            # Return structured_response with content attribute (PageContentResponse)
+            from types import SimpleNamespace
+
+            mock_structured = SimpleNamespace(content="# API Reference")
+            return {"structured_response": mock_structured}
 
         mock_agent.ainvoke.side_effect = capture_invoke
         mock_create.return_value = mock_agent
@@ -1211,9 +1288,9 @@ def test_should_fan_out_returns_send_list():
                         description="First",
                         importance=PageImportance.HIGH,
                     ),
-                ]
+                ],
             )
-        ]
+        ],
     )
 
     state = WikiWorkflowState(
@@ -1249,18 +1326,33 @@ def test_should_fan_out_multiple_pages():
                 id="section-1",
                 title="Section 1",
                 pages=[
-                    WikiPageDetail(id="p1", title="P1", description="Page 1", importance=PageImportance.HIGH),
-                    WikiPageDetail(id="p2", title="P2", description="Page 2", importance=PageImportance.MEDIUM),
-                ]
+                    WikiPageDetail(
+                        id="p1",
+                        title="P1",
+                        description="Page 1",
+                        importance=PageImportance.HIGH,
+                    ),
+                    WikiPageDetail(
+                        id="p2",
+                        title="P2",
+                        description="Page 2",
+                        importance=PageImportance.MEDIUM,
+                    ),
+                ],
             ),
             WikiSection(
                 id="section-2",
                 title="Section 2",
                 pages=[
-                    WikiPageDetail(id="p3", title="P3", description="Page 3", importance=PageImportance.LOW),
-                ]
-            )
-        ]
+                    WikiPageDetail(
+                        id="p3",
+                        title="P3",
+                        description="Page 3",
+                        importance=PageImportance.LOW,
+                    ),
+                ],
+            ),
+        ],
     )
 
     state = WikiWorkflowState(
@@ -1293,7 +1385,9 @@ def test_workflow_includes_fan_out_nodes():
 
     workflow = create_wiki_workflow()
     graph = workflow.get_graph()
-    node_names = [name for name in graph.nodes.keys() if name not in ("__start__", "__end__")]
+    node_names = [
+        name for name in graph.nodes.keys() if name not in ("__start__", "__end__")
+    ]
 
     # Must have the worker node for fan-out
     assert "generate_single_page" in node_names

@@ -14,15 +14,38 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 @pytest.fixture
 def mock_mcp_tools():
-    """Mock MCP filesystem tools."""
+    """Mock MCP filesystem tools with proper args_schema."""
+    from pydantic import BaseModel, Field
+
+    # Create a proper args_schema for the mock tools
+    class ReadFileArgs(BaseModel):
+        path: str = Field(description="File path")
+        head: int = Field(default=None, description="Read first N lines")
+        tail: int = Field(default=None, description="Read last N lines")
+
+    class ListDirArgs(BaseModel):
+        path: str = Field(description="Directory path")
+
+    class SearchArgs(BaseModel):
+        pattern: str = Field(description="Search pattern")
+
     read_file_tool = MagicMock(name="read_text_file")
     read_file_tool.name = "read_text_file"
+    read_file_tool.description = "Read a text file"
+    read_file_tool.args_schema = ReadFileArgs
+    read_file_tool.coroutine = AsyncMock()
 
     list_dir_tool = MagicMock(name="list_directory")
     list_dir_tool.name = "list_directory"
+    list_dir_tool.description = "List directory contents"
+    list_dir_tool.args_schema = ListDirArgs
+    list_dir_tool.coroutine = AsyncMock()
 
     search_tool = MagicMock(name="search_files")
     search_tool.name = "search_files"
+    search_tool.description = "Search for files"
+    search_tool.args_schema = SearchArgs
+    search_tool.coroutine = AsyncMock()
 
     return [read_file_tool, list_dir_tool, search_tool]
 
@@ -112,8 +135,13 @@ async def test_create_structure_agent_returns_compiled_graph(mock_mcp_tools, moc
     mock_agent.ainvoke = AsyncMock()
 
     with patch("src.agents.wiki_react_agents.get_mcp_tools", new_callable=AsyncMock, return_value=mock_mcp_tools), \
-         patch("src.agents.wiki_react_agents.get_llm", return_value=mock_llm), \
-         patch("src.agents.wiki_react_agents.create_react_agent", return_value=mock_agent):
+         patch("src.agents.wiki_react_agents.ChatGoogleGenerativeAI", return_value=mock_llm), \
+         patch("src.agents.wiki_react_agents.create_agent", return_value=mock_agent), \
+         patch("src.agents.wiki_react_agents.SummarizationMiddleware"), \
+         patch("src.agents.wiki_react_agents.PatchToolCallsMiddleware"), \
+         patch("src.agents.wiki_react_agents.ModelRetryMiddleware"), \
+         patch("src.agents.wiki_react_agents.ToolRetryMiddleware"), \
+         patch("src.agents.wiki_react_agents.TodoListMiddleware"):
 
         agent = await create_structure_agent()
 
@@ -123,7 +151,7 @@ async def test_create_structure_agent_returns_compiled_graph(mock_mcp_tools, moc
 
 @pytest.mark.asyncio
 async def test_create_structure_agent_with_context(mock_mcp_tools, mock_llm):
-    """Structure agent should accept context parameters."""
+    """Structure agent should be callable and return an agent wrapper."""
     from src.agents.wiki_react_agents import create_structure_agent
 
     # Create a mock agent that has ainvoke
@@ -131,14 +159,16 @@ async def test_create_structure_agent_with_context(mock_mcp_tools, mock_llm):
     mock_agent.ainvoke = AsyncMock()
 
     with patch("src.agents.wiki_react_agents.get_mcp_tools", new_callable=AsyncMock, return_value=mock_mcp_tools), \
-         patch("src.agents.wiki_react_agents.get_llm", return_value=mock_llm), \
-         patch("src.agents.wiki_react_agents.create_react_agent", return_value=mock_agent):
+         patch("src.agents.wiki_react_agents.ChatGoogleGenerativeAI", return_value=mock_llm), \
+         patch("src.agents.wiki_react_agents.create_agent", return_value=mock_agent), \
+         patch("src.agents.wiki_react_agents.SummarizationMiddleware"), \
+         patch("src.agents.wiki_react_agents.PatchToolCallsMiddleware"), \
+         patch("src.agents.wiki_react_agents.ModelRetryMiddleware"), \
+         patch("src.agents.wiki_react_agents.ToolRetryMiddleware"), \
+         patch("src.agents.wiki_react_agents.TodoListMiddleware"):
 
-        agent = await create_structure_agent(
-            clone_path="/tmp/test-repo",
-            file_tree="src/\n  main.py\n  utils.py",
-            readme_content="# Test Project",
-        )
+        # create_structure_agent takes no parameters - context is passed at invocation time
+        agent = await create_structure_agent()
 
         assert agent is not None
         assert hasattr(agent, "ainvoke")
@@ -151,7 +181,7 @@ async def test_create_structure_agent_with_context(mock_mcp_tools, mock_llm):
 
 @pytest.mark.asyncio
 async def test_create_page_agent_returns_compiled_graph(mock_mcp_tools, mock_llm):
-    """Page agent should be a compiled LangGraph."""
+    """Page agent should be a compiled LangGraph with native structured output."""
     from src.agents.wiki_react_agents import create_page_agent
 
     # Create a mock agent that has ainvoke
@@ -159,8 +189,12 @@ async def test_create_page_agent_returns_compiled_graph(mock_mcp_tools, mock_llm
     mock_agent.ainvoke = AsyncMock()
 
     with patch("src.agents.wiki_react_agents.get_mcp_tools", new_callable=AsyncMock, return_value=mock_mcp_tools), \
-         patch("src.agents.wiki_react_agents.get_llm", return_value=mock_llm), \
-         patch("src.agents.wiki_react_agents.create_react_agent", return_value=mock_agent):
+         patch("src.agents.wiki_react_agents.ChatGoogleGenerativeAI", return_value=mock_llm), \
+         patch("src.agents.wiki_react_agents.create_agent", return_value=mock_agent), \
+         patch("src.agents.wiki_react_agents.SummarizationMiddleware"), \
+         patch("src.agents.wiki_react_agents.PatchToolCallsMiddleware"), \
+         patch("src.agents.wiki_react_agents.ModelRetryMiddleware"), \
+         patch("src.agents.wiki_react_agents.ToolRetryMiddleware"):
 
         agent = await create_page_agent()
 
@@ -170,7 +204,7 @@ async def test_create_page_agent_returns_compiled_graph(mock_mcp_tools, mock_llm
 
 @pytest.mark.asyncio
 async def test_create_page_agent_with_clone_path(mock_mcp_tools, mock_llm):
-    """Page agent should accept clone_path parameter."""
+    """Page agent should be callable without parameters (clone_path passed at invocation)."""
     from src.agents.wiki_react_agents import create_page_agent
 
     # Create a mock agent that has ainvoke
@@ -178,12 +212,15 @@ async def test_create_page_agent_with_clone_path(mock_mcp_tools, mock_llm):
     mock_agent.ainvoke = AsyncMock()
 
     with patch("src.agents.wiki_react_agents.get_mcp_tools", new_callable=AsyncMock, return_value=mock_mcp_tools), \
-         patch("src.agents.wiki_react_agents.get_llm", return_value=mock_llm), \
-         patch("src.agents.wiki_react_agents.create_react_agent", return_value=mock_agent):
+         patch("src.agents.wiki_react_agents.ChatGoogleGenerativeAI", return_value=mock_llm), \
+         patch("src.agents.wiki_react_agents.create_agent", return_value=mock_agent), \
+         patch("src.agents.wiki_react_agents.SummarizationMiddleware"), \
+         patch("src.agents.wiki_react_agents.PatchToolCallsMiddleware"), \
+         patch("src.agents.wiki_react_agents.ModelRetryMiddleware"), \
+         patch("src.agents.wiki_react_agents.ToolRetryMiddleware"):
 
-        agent = await create_page_agent(
-            clone_path="/tmp/test-repo",
-        )
+        # create_page_agent takes no parameters - context is passed at invocation time
+        agent = await create_page_agent()
 
         assert agent is not None
         assert hasattr(agent, "ainvoke")

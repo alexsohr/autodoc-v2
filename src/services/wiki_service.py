@@ -892,8 +892,9 @@ Remember: All file paths are absolute. Read files COMPLETELY, not just headers!
                 "repository_id": str(repository_id),  # Pass to middleware
             })
 
-            # Use generated_content from PageAgentWrapper
-            new_content = result.get("generated_content", "")
+            # Extract content from structured_response (PageContentResponse schema)
+            structured = result.get("structured_response")
+            new_content = structured.content if structured else ""
 
             if not new_content:
                 return {
